@@ -1,0 +1,4 @@
+Manifest-Version: 1.0
+Main-Class: com.testapp.Main
+Created-By: 25 (Eclipse Adoptium / OpenJDK)
+

@@ -1,0 +1,77 @@
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# CMake build directories and caches
+build/
+/bin/
+out/
+!gui/src-tauri/bin/.gitkeep
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CMakeScripts/
+Testing/
+Makefile
+*.cmake
+!CMakeLists.txt
+!core/CMakeLists.txt
+
+# Visual Studio / MSVC artifacts
+.vs/
+*.sln
+*.vcxproj*
+*.user
+*.suo
+*.ipch
+x64/
+x86/
+Debug/
+Release/
+
+# CLion / IntelliJ / VS Code
+.idea/
+.vscode/
+*.swp
+*~
+
+# Gradle & Java build artifacts
+.gradle/
+**/build/
+**/dist/
+*.class
+*.jar
+!sample_app/gradle/wrapper/gradle-wrapper.jar
+
+# Tauri & Node artifacts (for future GUI)
+node_modules/
+src-tauri/target/
+
+# OS specific
+.DS_Store
+Thumbs.db

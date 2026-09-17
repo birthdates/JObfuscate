@@ -1,0 +1,292 @@
+# JOBFUSCATE SOURCE-AVAILABLE NON-COMMERCIAL LICENSE
+
+Copyright (c) 2026 Liam Kubicki
+
+Version 1.0
+
+## 1. Definitions
+
+For purposes of this License:
+
+**"Software"** means the JObfuscate software, including its source code, compiled binaries, command-line interface (CLI), graphical user interface (GUI), libraries, modules, scripts, configuration files, documentation, and other materials distributed by the Copyright Holder as part of the Software.
+
+**"Source Code"** means the human-readable source code of the Software and any accompanying files reasonably necessary to modify and build the Software.
+
+**"Compiled Version"** means any executable, binary, JAR, native executable, packaged application, installer, or other machine-readable form of the Software produced from the Source Code.
+
+**"Copyright Holder"** means Liam Kubicki and any party subsequently authorized by the Copyright Holder to issue licenses for the Software.
+
+**"Non-Commercial Use"** means use of the Software that is not conducted for a Commercial Purpose.
+
+**"Commercial Purpose"** means a purpose that directly or indirectly:
+
+1. generates revenue, compensation, profit, or other monetary benefit for the user or another party;
+
+2. supports, operates, develops, maintains, or contributes to a business or commercial organization;
+
+3. is performed as part of paid employment, contract work, consulting, freelancing, or other compensated services;
+
+4. is performed for a product, service, application, game, plugin, library, mod, server, website, or other software that is sold, licensed, subscribed to, monetized, or otherwise provided for compensation;
+
+5. provides obfuscation, transformation, packaging, build, protection, or related services to another person or organization for compensation;
+
+6. is performed as part of a commercial software development, build, release, or distribution pipeline; or
+
+7. otherwise provides a material commercial benefit to a business, organization, or revenue-generating project.
+
+**"Commercial User"** means any individual, company, organization, partnership, corporation, or other legal or natural person that uses the Software for a Commercial Purpose.
+
+**"Commercial License"** means a separate license granted by the Copyright Holder permitting Commercial Use of the Software.
+
+**"Authorized User"** means an employee, contractor, agent, or other person authorized by a Commercial License holder to use the Software on that license holder's behalf.
+
+## 2. Non-Commercial License Grant
+
+Subject to the terms and conditions of this License, the Copyright Holder grants you a worldwide, non-exclusive, royalty-free, non-transferable license to:
+
+1. use the Software for Non-Commercial Use;
+
+2. inspect and study the Source Code;
+
+3. modify the Source Code for Non-Commercial Use;
+
+4. compile the Software and modified versions of the Software for Non-Commercial Use;
+
+5. run the Software and modified versions of the Software for Non-Commercial Use; and
+
+6. redistribute the unmodified Software or modified versions of the Software for Non-Commercial Use, provided that the requirements of this License are satisfied.
+
+No payment is required for uses that qualify as Non-Commercial Use under this License.
+
+## 3. Commercial Use Requires a Commercial License
+
+Commercial Use of the Software is not permitted under this License.
+
+A Commercial User must obtain a valid Commercial License from the Copyright Holder before using the Software for a Commercial Purpose.
+
+The standard Commercial License fee is:
+
+**USD $250 per 12-month license period.**
+
+The Copyright Holder may offer different pricing, terms, or commercial licensing arrangements at its discretion.
+
+A Commercial License must be valid for the entire period during which the Software is used for Commercial Use.
+
+## 4. Organizational Commercial License
+
+A Commercial License purchased by a company or organization covers Authorized Users acting on behalf of that company or organization.
+
+Authorized Users may include:
+
+* employees;
+* contractors;
+* consultants;
+* agents; and
+* automated systems operated on behalf of the license holder.
+
+The license also covers reasonable internal use of the Software by the organization, including use on:
+
+* employee workstations;
+* development machines;
+* build servers;
+* CI/CD systems;
+* automated build pipelines;
+* release systems; and
+* other infrastructure operated by or on behalf of the license holder.
+
+An organization's Commercial License does not authorize unrelated individuals or organizations to use the Software for their own Commercial Purposes.
+
+## 5. Individual Commercial Users
+
+An individual who uses the Software for Commercial Use must obtain their own Commercial License unless they are an Authorized User covered by an existing Commercial License.
+
+For example, an independent developer, freelancer, contractor, or solo software developer who uses the Software to obfuscate software that they sell, license, monetize, or otherwise provide for compensation is required to obtain a Commercial License.
+
+The fact that the individual is not incorporated or does not operate through a registered company does not make the use Non-Commercial.
+
+## 6. Commercial Software Processed by the Software
+
+The Commercial License requirement applies to the use of the Software itself.
+
+For example, a person may use the Software to obfuscate:
+
+* a commercial Java application;
+* a paid Minecraft plugin;
+* a paid Minecraft mod;
+* a commercial Java library;
+* a subscription-based application;
+* a monetized server plugin;
+* a proprietary enterprise application; or
+* other software distributed for compensation,
+
+only if that person has a valid Commercial License.
+
+However, a person who merely receives, installs, executes, or uses software that was previously processed by the Software does not become a Commercial User solely because that software was processed by the Software.
+
+The recipients of such processed software are not required to obtain a Commercial License merely because the software was obfuscated using JObfuscate.
+
+## 7. Commercial Redistribution of the Software
+
+Commercial redistribution of the Software is prohibited without a valid Commercial License and any additional written permission required by the Copyright Holder.
+
+A Commercial User may not sell, sublicense, rent, lease, bundle, package, or otherwise commercially redistribute the Software or a modified version of the Software unless expressly permitted by a Commercial License.
+
+A Commercial License for using the Software does not automatically grant permission to commercially redistribute the Software itself.
+
+Redistribution rights must be expressly granted where required.
+
+## 8. Modification and Derivative Versions
+
+You may modify the Source Code for Non-Commercial Use.
+
+Modified versions remain subject to this License unless the Copyright Holder expressly grants different terms.
+
+Changing the Software's name, user interface, package name, namespace, branding, executable name, file structure, or other identifying characteristics does not create a new independent work for purposes of avoiding the Commercial License requirement.
+
+Likewise, recompiling, repackaging, optimizing, refactoring, partially rewriting, or otherwise modifying the Software does not eliminate the requirement to obtain a Commercial License when the resulting software is used for a Commercial Purpose.
+
+## 9. Source Code and Compiled Versions
+
+The restrictions in this License apply to both the Source Code and Compiled Versions of the Software.
+
+This includes, without limitation:
+
+* source code;
+* JAR files;
+* native executables;
+* CLI releases (obfuscator-cli);
+* GUI releases (JObfuscate);
+* installers;
+* libraries;
+* plugins;
+* modified builds;
+* forks;
+* packaged distributions; and
+* derivative versions.
+
+A person may not avoid the Commercial License requirement merely by using a Compiled Version instead of the Source Code.
+
+## 10. Non-Commercial Redistribution
+
+You may redistribute the Software or modified versions of the Software for Non-Commercial purposes provided that:
+
+1. the copyright notice is retained;
+
+2. a copy of this License is included;
+
+3. you do not represent the Software as your own original work;
+
+4. you do not remove or intentionally obscure existing copyright or license notices; and
+
+5. the redistribution itself does not constitute Commercial Use.
+
+## 11. Attribution
+
+You must retain all copyright, license, and attribution notices contained within the Software.
+
+You may add additional copyright notices for your own modifications, provided that doing so does not imply ownership of the original Software.
+
+## 12. No Circumvention
+
+You may not intentionally structure, modify, rename, repackage, split, combine, or otherwise manipulate the Software for the purpose of circumventing the Commercial License requirement.
+
+Examples include, but are not limited to:
+
+1. modifying a small portion of the Software and claiming that the resulting version is no longer subject to this License;
+
+2. removing identifying information and redistributing the Software as a different product;
+
+3. using an intermediary or third party to perform Commercial Use without obtaining the required license;
+
+4. separating functionality into multiple components for the purpose of avoiding the Commercial License requirement; or
+
+5. using a modified or compiled version specifically to circumvent the licensing requirements of this License.
+
+## 13. License Verification
+
+The Copyright Holder may provide license keys, license files, account-based licensing, activation mechanisms, or other mechanisms for verifying Commercial Licenses.
+
+Where technically implemented, the Software may perform reasonable license verification necessary to determine whether a Commercial License is active.
+
+The Software will not be required to transmit source code, proprietary user data, or processed customer software to the Copyright Holder solely for license verification.
+
+## 14. No Transfer of Ownership
+
+This License grants rights to use the Software. It does not transfer ownership of the Software or its intellectual property.
+
+All rights not expressly granted under this License are reserved by the Copyright Holder.
+
+## 15. Third-Party Components
+
+The Software may contain or depend upon third-party software distributed under separate licenses.
+
+Nothing in this License modifies or overrides the terms of those third-party licenses.
+
+Third-party components remain subject to their respective licenses.
+
+Where applicable, the licenses and notices for third-party components are included with the Software or identified in the project documentation.
+
+## 16. Prohibited Uses
+
+Except as expressly permitted by this License or a separate written agreement with the Copyright Holder, you may not:
+
+1. use the Software for Commercial Use;
+
+2. commercially redistribute the Software;
+
+3. sublicense the Software;
+
+4. sell access to the Software;
+
+5. provide the Software as a paid service;
+
+6. offer the Software's functionality to third parties as a paid service; or
+
+7. use the Software to provide commercial obfuscation or software-protection services.
+
+## 17. Termination
+
+This License automatically terminates upon material violation of its terms.
+
+Upon termination, you must immediately cease all use, modification, and redistribution of the Software unless you obtain a separate license from the Copyright Holder.
+
+Termination does not affect rights or obligations that accrued before termination where applicable under law.
+
+## 18. No Warranty
+
+THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING, WITHOUT LIMITATION, WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, NON-INFRINGEMENT, ACCURACY, OR RELIABILITY.
+
+THE COPYRIGHT HOLDER DOES NOT WARRANT THAT THE SOFTWARE WILL BE ERROR-FREE, SECURE, UNINTERRUPTED, OR SUITABLE FOR ANY PARTICULAR PURPOSE.
+
+## 19. Limitation of Liability
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL, EXEMPLARY, OR PUNITIVE DAMAGES, OR FOR ANY LOSS OF PROFITS, REVENUE, DATA, BUSINESS, GOODWILL, OR OTHER ECONOMIC LOSS ARISING FROM OR RELATED TO THE SOFTWARE OR THIS LICENSE.
+
+## 20. Compliance With Applicable Law
+
+You are responsible for ensuring that your use of the Software complies with all applicable laws and regulations.
+
+Nothing in this License grants permission to use the Software for an unlawful purpose.
+
+## 21. Changes to This License
+
+The Copyright Holder may publish new versions of this License for future releases of the Software.
+
+Unless expressly stated otherwise, a particular version of the Software remains governed by the version of the License distributed with that version.
+
+## 22. Entire Agreement
+
+This License constitutes the complete license governing the rights granted to you with respect to the Software, except where a separate written agreement has been entered into with the Copyright Holder.
+
+Any separate Commercial License Agreement takes precedence over this License with respect to the rights expressly granted by that Commercial License Agreement.
+
+## 23. Contact
+
+For commercial licensing, permissions, or questions regarding this License:
+
+**Copyright Holder:** Liam Kubicki
+**Email:** kubickiliam@gmail.com
+
+---
+
+Copyright © 2026 Liam Kubicki. All rights reserved.

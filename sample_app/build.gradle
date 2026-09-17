@@ -1,0 +1,56 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+group = 'com.testapp'
+version = '1.0.0'
+
+// Easily configure target Java version (supports 8 through 25, defaults to 25 or -PtargetJavaVersion)
+def targetJavaVersion = project.hasProperty('targetJavaVersion') ? Integer.parseInt(project.property('targetJavaVersion') as String) : 25
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(targetJavaVersion)
+    }
+}
+
+sourceSets {
+    main {
+        java {
+            srcDirs = ['src/main/java']
+            if (targetJavaVersion < 25) {
+                exclude 'com/testapp/language/Java25.java'
+            }
+            if (targetJavaVersion < 21) {
+                exclude 'com/testapp/language/Java21.java'
+            }
+            if (targetJavaVersion < 17) {
+                exclude 'com/testapp/language/Java17.java'
+            }
+            if (targetJavaVersion < 11) {
+                exclude 'com/testapp/language/Java11.java'
+            }
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+application {
+    mainClass = 'com.testapp.Main'
+}
+
+jar {
+    manifest {
+        attributes(
+            'Main-Class': 'com.testapp.Main',
+            'Implementation-Title': 'Java Obfuscator Test Application',
+            'Implementation-Version': project.version
+        )
+    }
+    archiveFileName = 'sample_app.jar'
+    destinationDirectory = file("${projectDir}/dist")
+}
