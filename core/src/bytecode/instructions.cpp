@@ -231,14 +231,14 @@ std::vector<Instruction> disassemble(std::span<const u1> code_bytes) {
             case Opcode::invokeinterface: {
                 u2 index = reader.read_u2();
                 u1 count = reader.read_u1();
-                reader.read_u1(); // zero byte
+                (void)reader.read_u1(); // zero byte
                 instr.operand = InterfaceCallOperand{index, count};
                 break;
             }
 
             case Opcode::invokedynamic: {
                 u2 index = reader.read_u2();
-                reader.read_u2(); // two zero bytes
+                (void)reader.read_u2(); // two zero bytes
                 instr.operand = InvokeDynamicOperand{index};
                 break;
             }
@@ -419,7 +419,7 @@ std::vector<u1> assemble(const std::vector<Instruction>& instructions) {
     return std::move(writer.data());
 }
 
-static void recalculate_stack_map_table(AttrCode& code, ConstantPool& cp, const std::vector<Instruction>& new_instructions, const std::vector<u4>& new_offsets, const std::function<u4(i4)>& lookup_target, u4 new_total_size, const std::function<u2(u2)>& remap_cp_class = nullptr) {
+static void recalculate_stack_map_table(AttrCode& code, ConstantPool& cp, const std::vector<Instruction>& new_instructions, const std::vector<u4>& /*new_offsets*/, const std::function<u4(i4)>& lookup_target, u4 new_total_size, const std::function<u2(u2)>& remap_cp_class = nullptr) {
     struct FrameRecord {
         u1 frame_type{0};
         u4 orig_bci{0};

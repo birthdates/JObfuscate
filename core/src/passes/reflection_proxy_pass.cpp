@@ -185,20 +185,8 @@ static std::string sanitize_type(std::string_view type_desc, std::string_view cu
     return std::string(type_desc);
 }
 
-static std::string sanitize_method_desc(std::string_view desc, std::string_view current_class, const config::ReflectionProxyOptions& opts) {
-    auto params = parse_proxy_params(desc);
-    std::string new_desc = "(";
-    for (const auto& p : params) {
-        new_desc += sanitize_type(p.desc, current_class, opts);
-    }
-    new_desc += ")";
-    std::string ret = get_return_desc(desc);
-    new_desc += sanitize_type(ret, current_class, opts);
-    return new_desc;
-}
-
 template<typename F1, typename F2>
-static void emit_build_param_types(std::vector<bytecode::Instruction>& p_instrs,
+static void emit_build_param_types(std::vector<bytecode::Instruction>& /*p_instrs*/,
                                   bytecode::ConstantPool& cp,
                                   const std::vector<ProxyParam>& params,
                                   F1&& add_pi, F2&& add_pop) {
@@ -262,7 +250,7 @@ static void emit_build_param_types(std::vector<bytecode::Instruction>& p_instrs,
 }
 
 template<typename F1, typename F2>
-static void emit_build_args_array(std::vector<bytecode::Instruction>& p_instrs,
+static void emit_build_args_array(std::vector<bytecode::Instruction>& /*p_instrs*/,
                                   bytecode::ConstantPool& cp,
                                   const std::vector<ProxyParam>& params,
                                   bytecode::u1 slot_offset,
@@ -286,7 +274,7 @@ static void emit_build_args_array(std::vector<bytecode::Instruction>& p_instrs,
 }
 
 template<typename F1, typename F2>
-static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& p_instrs,
+static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& /*p_instrs*/,
                                       bytecode::ConstantPool& cp,
                                       std::string_view ret_desc,
                                       std::string_view current_class,
@@ -371,7 +359,7 @@ static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& p_inst
     }
 }
 
-static std::string get_proxy_method_desc(const std::string& target_class, const std::string& target_desc, bool is_static, std::string_view current_class, const config::ReflectionProxyOptions& opts) {
+static std::string get_proxy_method_desc(const std::string& /*target_class*/, const std::string& target_desc, bool is_static, std::string_view current_class, const config::ReflectionProxyOptions& opts) {
     auto params = parse_proxy_params(target_desc);
     std::string new_desc = "(";
     if (!is_static) {
@@ -520,7 +508,7 @@ static bytecode::u2 get_or_create_ann_decryptor(bytecode::ClassFile& cls) {
 static void synthesize_proxy_class_literal(bytecode::ClassFile& cls,
                                           const std::string& proxy_name,
                                           const std::string& target_class,
-                                          PassContext& ctx) {
+                                          PassContext& /*ctx*/) {
     auto& cp = cls.constant_pool();
     std::string dot_target_class = target_class;
     std::replace(dot_target_class.begin(), dot_target_class.end(), '/', '.');
@@ -1035,7 +1023,7 @@ void ReflectionProxyPass::transform_invocations(bytecode::AttrCode& code, byteco
     }
 }
 
-static void sanitize_unreferenced_classes(bytecode::ClassFile& cls, PassContext& ctx) {
+static void sanitize_unreferenced_classes(bytecode::ClassFile& cls, PassContext& /*ctx*/) {
     cls.sanitize_unused_constants();
 }
 

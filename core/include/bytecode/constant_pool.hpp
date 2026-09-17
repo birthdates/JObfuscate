@@ -173,6 +173,7 @@ public:
     u2 find_or_add_fieldref(std::string_view class_name, std::string_view field_name, std::string_view descriptor);
     u2 find_or_add_integer(i4 value);
     u2 find_or_add_long(i8 value);
+    [[nodiscard]] bool has_utf8(std::string_view value) const;
     void rebuild_utf8_lookup();
 
     // Serialization

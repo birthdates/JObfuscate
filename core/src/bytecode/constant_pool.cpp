@@ -160,6 +160,10 @@ u2 ConstantPool::find_or_add_long(i8 value) {
     return add_entry(CpLong{value});
 }
 
+bool ConstantPool::has_utf8(std::string_view value) const {
+    return m_utf8_lookup.find(std::string(value)) != m_utf8_lookup.end();
+}
+
 void ConstantPool::rebuild_utf8_lookup() {
     m_utf8_lookup.clear();
     for (size_t i = 1; i < m_entries.size(); ++i) {

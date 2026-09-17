@@ -143,7 +143,7 @@ bool JarArchive::save_to_file(const std::filesystem::path& jar_path, std::string
 
     // Write all non-class resources first (including META-INF/MANIFEST.MF)
     for (const auto& [name, entry] : m_resources) {
-        if (!mz_zip_writer_add_mem(&zip_archive, name.c_str(), entry.data.data(), entry.data.size(), MZ_DEFAULT_COMPRESSION)) {
+        if (!mz_zip_writer_add_mem(&zip_archive, name.c_str(), entry.data.data(), entry.data.size(), static_cast<mz_uint>(MZ_DEFAULT_COMPRESSION))) {
             error_msg = "Failed to write resource entry: " + name;
             mz_zip_writer_end(&zip_archive);
             return false;
@@ -154,7 +154,7 @@ bool JarArchive::save_to_file(const std::filesystem::path& jar_path, std::string
     for (const auto& [name, cf] : m_classes) {
         std::string zip_entry_name = name + ".class";
         std::vector<bytecode::u1> class_bytes = cf.to_bytes();
-        if (!mz_zip_writer_add_mem(&zip_archive, zip_entry_name.c_str(), class_bytes.data(), class_bytes.size(), MZ_DEFAULT_COMPRESSION)) {
+        if (!mz_zip_writer_add_mem(&zip_archive, zip_entry_name.c_str(), class_bytes.data(), class_bytes.size(), static_cast<mz_uint>(MZ_DEFAULT_COMPRESSION))) {
             error_msg = "Failed to write class entry: " + zip_entry_name;
             mz_zip_writer_end(&zip_archive);
             return false;

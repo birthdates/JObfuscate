@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <sstream>
 #include <iostream>
 
@@ -393,9 +394,24 @@ void StringEncryptPass::transform_indy_string_concat(bytecode::ClassFile& cls, P
 
     // Wipe recipe strings from constant pool
     for (bytecode::u2 u_idx : recipes_to_wipe) {
-        if (auto* u = cp.get_mut_if<bytecode::CpUtf8>(u_idx)) {
-            u->value.clear();
+        bool shared_with_non_string = false;
+        for (size_t i = 1; i < cp.size(); ++i) {
+            if (const auto* c = cp.get_if<bytecode::CpClass>(static_cast<bytecode::u2>(i))) {
+                if (c->name_index == u_idx) { shared_with_non_string = true; break; }
+            } else if (const auto* nat = cp.get_if<bytecode::CpNameAndType>(static_cast<bytecode::u2>(i))) {
+                if (nat->name_index == u_idx || nat->descriptor_index == u_idx) {
+                    shared_with_non_string = true; break;
+                }
+            }
         }
+        if (!shared_with_non_string) {
+            if (auto* u = cp.get_mut_if<bytecode::CpUtf8>(u_idx)) {
+                u->value.clear();
+            }
+        }
+    }
+    if (!recipes_to_wipe.empty()) {
+        cp.rebuild_utf8_lookup();
     }
 }
 
@@ -1079,7 +1095,6 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
         return decryptors[idx];
     };
 
-    bool encrypted_any = false;
     size_t string_index = 0;
     std::unordered_map<bytecode::u2, std::pair<bytecode::u2, bytecode::u4>> encrypted_cp_strings;
     std::unordered_map<bytecode::u2, bytecode::u2> string_to_decryptor_mref;
@@ -1131,7 +1146,17 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
                                 item_key = static_cast<bytecode::u4>(base_key ^ (string_index * 0x5bd1e995U + 0x1337U));
 
                                 std::string enc = encrypt_string_variant(original_str, item_key, dec.variant_idx);
+                                int retries = 0;
+                                while ((enc == original_str || cp.has_utf8(enc)) && retries++ < 50) {
+                                    item_key = static_cast<bytecode::u4>(item_key ^ (0x9E3779B9U + retries * 0x1337U));
+                                    enc = encrypt_string_variant(original_str, item_key, dec.variant_idx);
+                                }
+
                                 enc_str_idx = cp.find_or_add_string(enc);
+                                if (enc_str_idx == cp_idx) {
+                                    bytecode::u2 new_utf = cp.add_entry(bytecode::CpUtf8{enc});
+                                    enc_str_idx = cp.add_entry(bytecode::CpString{new_utf});
+                                }
                                 encrypted_cp_strings[cp_idx] = {enc_str_idx, item_key};
                                 string_to_decryptor_mref[cp_idx] = call_mref;
                                 ctx.stats.strings_encrypted++;
@@ -1177,7 +1202,6 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
                             call_instr.operand = bytecode::CpIndexOperand{call_mref};
                             new_instructions.push_back(call_instr);
 
-                            encrypted_any = true;
                             modified = true;
                             continue;
                         }
@@ -1193,10 +1217,29 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
         }
     }
 
+    // Collect all Utf8 indices that must NEVER be wiped (e.g. ciphertexts, method descriptors, etc.)
+    std::unordered_set<bytecode::u2> protected_utf8_indices;
+    for (const auto& [orig_idx, enc_pair] : encrypted_cp_strings) {
+        if (const auto* enc_str = cp.get_if<bytecode::CpString>(enc_pair.first)) {
+            protected_utf8_indices.insert(enc_str->string_index);
+        }
+    }
+    for (const auto& dec : decryptors) {
+        if (const auto* mr = cp.get_if<bytecode::CpMethodref>(dec.mref)) {
+            if (const auto* nat = cp.get_if<bytecode::CpNameAndType>(mr->name_and_type_index)) {
+                protected_utf8_indices.insert(nat->name_index);
+                protected_utf8_indices.insert(nat->descriptor_index);
+            }
+        }
+    }
+
     // Erase original plaintext strings from the constant pool
     for (const auto& [orig_idx, enc_pair] : encrypted_cp_strings) {
+        if (orig_idx == enc_pair.first) continue;
         if (auto* original_cp_str = cp.get_if<bytecode::CpString>(orig_idx)) {
             bytecode::u2 orig_utf8_idx = original_cp_str->string_index;
+            if (protected_utf8_indices.count(orig_utf8_idx)) continue;
+
             bool shared_with_non_string = false;
             for (size_t i = 1; i < cp.size(); ++i) {
                 if (const auto* c = cp.get_if<bytecode::CpClass>(static_cast<bytecode::u2>(i))) {
@@ -1214,6 +1257,7 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
             }
         }
     }
+    cp.rebuild_utf8_lookup();
 
     // Inject all instantiated decryptor methods
     for (const auto& dec : decryptors) {

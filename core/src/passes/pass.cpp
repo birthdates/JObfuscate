@@ -36,7 +36,7 @@ const ClassHierarchyNode* ClassHierarchy::get_node(const std::string& name) cons
     return it != m_nodes.end() ? &it->second : nullptr;
 }
 
-bool ClassHierarchy::is_method_overridden_in_hierarchy(const std::string& class_name, const std::string& method_name, const std::string& desc) const {
+bool ClassHierarchy::is_method_overridden_in_hierarchy(const std::string& class_name, const std::string& /*method_name*/, const std::string& /*desc*/) const {
     // If method is in base class or interface, consider it an override
     const auto* node = get_node(class_name);
     if (!node) return false;
