@@ -651,6 +651,21 @@ runTestCase('MBA Opaque Predicates (mixed boolean-arithmetic identities)', () =>
   logColor(colors.darkCyan, `   MBA identity sequences emitted: ${hits}, execution verified.`);
 });
 
+// TEST 23c: Predicate Stability Loop (wall-clock-sensitive guard regression)
+// Opaque predicates must never depend on two clock samples: re-running the
+// same obfuscated jar re-evaluates every guard against fresh wall-clock
+// readings, catching time-of-check races deterministically-ish.
+runTestCase('Predicate Stability Loop (15x re-execution)', () => {
+  const outJar = path.join(testJarsDir, 'test_sample_mba.jar');
+  for (let i = 0; i < 15; i++) {
+    const out = runJavaJar(outJar);
+    if (!out.includes('TEST SUITES PASSED')) {
+      throw new Error(`Stability run ${i + 1}/15 failed execution!`);
+    }
+  }
+  logColor(colors.darkCyan, '   15/15 re-executions passed with fresh clock readings.');
+});
+
 // TEST 23b: Exception Dispatch (--exception-dispatch / --no-exception-dispatch)
 runTestCase('Exception Dispatch (--exception-dispatch / --no-exception-dispatch)', () => {
   const onJar = path.join(testJarsDir, 'test_sample_exc_dispatch.jar');

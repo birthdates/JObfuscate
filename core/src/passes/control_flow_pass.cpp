@@ -495,11 +495,14 @@ static void emit_opaque_branch(std::vector<bytecode::Instruction>& instrs,
         add_op(branch_op, bytecode::Branch16Operand{0, static_cast<bytecode::i4>(target)});
     } else if (inv == 6) {
         // MBA identity: (t ^ C) + 2 * (t & C) == t + C (holds mod 2^32).
+        // Single clock sample (dup), never two reads: wall-clock rollover
+        // between samples would break the equality.
         int32_t c = static_cast<int32_t>(ctx.rng());
-        push_runtime_int();
+        push_runtime_int(); // [t]
+        add_i(bytecode::Opcode::dup);
         push_const(c);
-        add_i(bytecode::Opcode::iadd); // [B = t + C]
-        push_runtime_int();
+        add_i(bytecode::Opcode::iadd); // [t, B = t + C]
+        add_i(bytecode::Opcode::swap); // [B, t]
         add_i(bytecode::Opcode::dup);
         push_const(c);
         add_i(bytecode::Opcode::ixor); // [B, t, t^C]
@@ -516,11 +519,13 @@ static void emit_opaque_branch(std::vector<bytecode::Instruction>& instrs,
         add_op(branch_op, bytecode::Branch16Operand{0, static_cast<bytecode::i4>(target)});
     } else if (inv == 7) {
         // MBA identity: (t | C) - (t & C) == t ^ C (holds mod 2^32).
+        // Single clock sample, see above.
         int32_t c = static_cast<int32_t>(ctx.rng());
-        push_runtime_int();
+        push_runtime_int(); // [t]
+        add_i(bytecode::Opcode::dup);
         push_const(c);
-        add_i(bytecode::Opcode::ixor); // [D = t^C]
-        push_runtime_int(); // [D, t]
+        add_i(bytecode::Opcode::ixor); // [t, D = t^C]
+        add_i(bytecode::Opcode::swap); // [D, t]
         add_i(bytecode::Opcode::dup);
         push_const(c);
         add_i(bytecode::Opcode::ior); // [D, t, t|C]
@@ -532,11 +537,13 @@ static void emit_opaque_branch(std::vector<bytecode::Instruction>& instrs,
         add_op(branch_op, bytecode::Branch16Operand{0, static_cast<bytecode::i4>(target)});
     } else {
         // MBA identity: (t & C) + (t | C) == t + C (holds mod 2^32).
+        // Single clock sample, see above.
         int32_t c = static_cast<int32_t>(ctx.rng());
-        push_runtime_int();
+        push_runtime_int(); // [t]
+        add_i(bytecode::Opcode::dup);
         push_const(c);
-        add_i(bytecode::Opcode::iadd); // [B = t + C]
-        push_runtime_int();
+        add_i(bytecode::Opcode::iadd); // [t, B = t + C]
+        add_i(bytecode::Opcode::swap); // [B, t]
         add_i(bytecode::Opcode::dup);
         push_const(c);
         add_i(bytecode::Opcode::iand); // [B, t, t&C]
