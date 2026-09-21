@@ -333,7 +333,8 @@ static size_t get_instruction_size(const Instruction& instr, size_t current_offs
             size += 4;
         } else if constexpr (std::is_same_v<T, TableSwitchData>) {
             size_t pad = (4 - (current_offset + 1) % 4) % 4;
-            size += pad + 12 + 4 * op.jump_offsets.size();
+            size_t num_targets = !op.jump_targets_abs.empty() ? op.jump_targets_abs.size() : op.jump_offsets.size();
+            size += pad + 12 + 4 * num_targets;
         } else if constexpr (std::is_same_v<T, LookupSwitchData>) {
             size_t pad = (4 - (current_offset + 1) % 4) % 4;
             size += pad + 8 + 8 * op.pairs.size();
@@ -553,6 +554,36 @@ static void recalculate_stack_map_table(AttrCode& code, ConstantPool& cp, const 
         }
     }
 
+    for (const auto& ex : code.exception_table) {
+        u4 h_tgt = ex.handler_pc;
+        if (h_tgt <= 0 || h_tgt >= new_total_size) continue;
+        // Exception entry always carries the throwable on the stack, so the
+        // handler needs a same_locals_1_stack_item frame even when a plain
+        // branch-target placeholder (same_frame) already exists there (e.g. a
+        // dead opaque branch into the handler). Richer frames are left alone.
+        BinaryWriter pw;
+        pw.write_u1(7); // Object_variable_info
+        u2 cidx = (ex.catch_type != 0) ? ex.catch_type : cp.find_or_add_class("java/lang/Throwable");
+        pw.write_u2(cidx);
+        FrameRecord* existing = nullptr;
+        for (auto& fr : frames) {
+            if (fr.new_bci == h_tgt) {
+                existing = &fr;
+                break;
+            }
+        }
+        if (!existing) {
+            FrameRecord rec;
+            rec.frame_type = 247; // same_locals_1_stack_item_extended
+            rec.new_bci = h_tgt;
+            rec.payload = std::move(pw.data());
+            frames.push_back(std::move(rec));
+        } else if (existing->frame_type == 0 || existing->frame_type == 251) {
+            existing->frame_type = 247;
+            existing->payload = std::move(pw.data());
+        }
+    }
+
     if (frames.empty()) return;
 
     // Sort frames by new_bci ascending
@@ -734,9 +765,15 @@ void update_code(AttrCode& code, const std::vector<Instruction>& new_instruction
                 writer.write_i4(def_rel);
                 writer.write_i4(op.low);
                 writer.write_i4(op.high);
-                for (i4 tgt : op.jump_targets_abs) {
-                    i4 j_rel = static_cast<i4>(lookup_target(tgt)) - static_cast<i4>(instr_new_off);
-                    writer.write_i4(j_rel);
+                if (!op.jump_targets_abs.empty()) {
+                    for (i4 tgt : op.jump_targets_abs) {
+                        i4 j_rel = static_cast<i4>(lookup_target(tgt)) - static_cast<i4>(instr_new_off);
+                        writer.write_i4(j_rel);
+                    }
+                } else {
+                    for (i4 off : op.jump_offsets) {
+                        writer.write_i4(off);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, LookupSwitchData>) {
                 size_t pad = (4 - (instr_new_off + 1) % 4) % 4;

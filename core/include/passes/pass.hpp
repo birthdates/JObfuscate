@@ -20,4 +20,14 @@ public:
     virtual bool run_on_class(bytecode::ClassFile& cls, PassContext& ctx);
 };
 
+void synthesize_global_cache_class(PassContext& ctx);
+
+// Shared MethodHandle lookup helpers living in the global cache class.
+// Virtual/static shapes share one descriptor; the pool member itself is
+// bound to findVirtual or findStatic. Proxies call a random pool member.
+inline constexpr const char* kMhLookupMethodDesc =
+    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+inline constexpr const char* kMhLookupGetterDesc =
+    "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;";
+
 } // namespace obf::passes

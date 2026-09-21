@@ -46,9 +46,27 @@ void ConsoleReporter::complete(bool success, uint64_t duration_ms, const Obfusca
         std::cout << " - Fields renamed:             " << stats.fields_renamed << "\n";
         std::cout << " - Strings encrypted:          " << stats.strings_encrypted << "\n";
         std::cout << " - Methods flattened:          " << stats.methods_flattened << "\n";
+        std::cout << " - Methods exception-routed:   " << stats.methods_exception_dispatched << "\n";
         std::cout << " - Reflection proxies created: " << stats.reflection_proxies_created << "\n";
         std::cout << " - Numbers obfuscated:         " << stats.numbers_obfuscated << "\n";
         std::cout << " - Members privatized:         " << stats.members_privatized << "\n";
+        if (stats.classes_shrunk > 0 || stats.methods_shrunk > 0 || stats.fields_shrunk > 0) {
+            std::cout << " - Dead classes removed:       " << stats.classes_shrunk << "\n";
+            std::cout << " - Dead methods pruned:        " << stats.methods_shrunk << "\n";
+            std::cout << " - Dead fields pruned:         " << stats.fields_shrunk << "\n";
+        }
+        if (stats.attributes_shrunk > 0) {
+            std::cout << " - Attributes stripped:        " << stats.attributes_shrunk << "\n";
+        }
+        if (stats.classes_encrypted > 0) {
+            std::cout << " - Classes encrypted:          " << stats.classes_encrypted << "\n";
+        }
+        if (stats.condy_call_sites_created > 0) {
+            std::cout << " - Condy call sites created:   " << stats.condy_call_sites_created << "\n";
+        }
+        if (stats.decompiler_deterrents_applied > 0) {
+            std::cout << " - Decompiler deterrents:      " << stats.decompiler_deterrents_applied << "\n";
+        }
         std::cout << " - Debug attributes stripped:  " << stats.debug_attributes_stripped << "\n";
     } else {
         std::cout << "[\033[31mFAILED\033[0m] Obfuscation failed after " << duration_ms << " ms\n";

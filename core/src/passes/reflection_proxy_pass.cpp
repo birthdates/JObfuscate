@@ -14,14 +14,24 @@ static bool should_proxy(std::string_view target_class, std::string_view current
     if (target_class.starts_with(std::string(current_class) + "$")) return false; // internal nested/local/anonymous classes
     if (current_class.starts_with(std::string(target_class) + "$")) return false; // outer enclosing class of inner class
     if (target_class == "java/lang/Object" || target_class == "java/lang/String" || 
-        target_class == "java/lang/StringBuilder" || target_class == "java/lang/System" ||
-        target_class == "java/lang/Math" || target_class == "java/lang/Class" ||
+        target_class == "java/lang/StringBuilder" || target_class == "java/lang/StringBuffer" ||
+        target_class == "java/lang/System" || target_class == "java/lang/Math" ||
+        target_class == "java/lang/Class" ||
+        target_class == "java/lang/Throwable" || target_class == "java/lang/Exception" ||
+        target_class == "java/lang/RuntimeException" || target_class == "java/lang/Error" ||
+        target_class.ends_with("Exception") || target_class.ends_with("Error") ||
+        target_class == "java/lang/Boolean" || target_class == "java/lang/Byte" ||
+        target_class == "java/lang/Character" || target_class == "java/lang/Short" ||
+        target_class == "java/lang/Integer" || target_class == "java/lang/Long" ||
+        target_class == "java/lang/Float" || target_class == "java/lang/Double" ||
+        target_class == "java/lang/Number" ||
         target_class == "java/lang/reflect/Method" || target_class == "java/lang/reflect/Constructor" ||
         target_class == "java/lang/reflect/Field") {
-        return false; // keep basic primitives and reflection API direct
+        return false; // keep basic primitives, wrappers, exceptions, and reflection API direct
     }
 
-    bool is_java = target_class.starts_with("java/") || target_class.starts_with("javax/") || target_class.starts_with("jdk/");
+    bool is_java = target_class.starts_with("java/") || target_class.starts_with("javax/") || target_class.starts_with("jdk/") ||
+                  target_class.starts_with("kotlin/") || target_class.starts_with("kotlinx/");
     if (is_java && !opts.proxy_java_imports) {
         return false;
     }
@@ -58,6 +68,24 @@ struct ProxyParam {
     std::string box_method;
     std::string box_desc;
 };
+
+template<typename F>
+static void emit_push_int(F&& add_pop, uint32_t val, bytecode::ConstantPool& cp) {
+    if (val <= 5) {
+        add_pop(static_cast<bytecode::Opcode>(static_cast<int>(bytecode::Opcode::iconst_0) + val), bytecode::NoOperand{});
+    } else if (val <= 127) {
+        add_pop(bytecode::Opcode::bipush, bytecode::ByteOperand{static_cast<bytecode::i1>(val)});
+    } else if (val <= 32767) {
+        add_pop(bytecode::Opcode::sipush, bytecode::ShortOperand{static_cast<bytecode::i2>(val)});
+    } else {
+        bytecode::u2 cidx = cp.find_or_add_integer(static_cast<int32_t>(val));
+        if (cidx <= 255) {
+            add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{cidx});
+        } else {
+            add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{cidx});
+        }
+    }
+}
 
 static std::vector<ProxyParam> parse_proxy_params(std::string_view desc) {
     std::vector<ProxyParam> params;
@@ -170,6 +198,10 @@ static std::string sanitize_type(std::string_view type_desc, std::string_view cu
     if (type_desc.empty()) return std::string(type_desc);
     if (type_desc[0] == 'L') {
         std::string bare_class = std::string(type_desc.substr(1, type_desc.size() - 2));
+        if (bare_class.starts_with("java/") || bare_class.starts_with("javax/") || bare_class.starts_with("jdk/") ||
+            bare_class.starts_with("kotlin/") || bare_class.starts_with("kotlinx/")) {
+            return std::string(type_desc);
+        }
         if (should_proxy(bare_class, current_class, opts)) {
             return "Ljava/lang/Object;";
         }
@@ -177,6 +209,10 @@ static std::string sanitize_type(std::string_view type_desc, std::string_view cu
         size_t elem_start = type_desc.find_first_not_of('[');
         if (elem_start != std::string_view::npos && type_desc[elem_start] == 'L') {
             std::string bare_class = std::string(type_desc.substr(elem_start + 1, type_desc.size() - elem_start - 2));
+            if (bare_class.starts_with("java/") || bare_class.starts_with("javax/") || bare_class.starts_with("jdk/") ||
+                bare_class.starts_with("kotlin/") || bare_class.starts_with("kotlinx/")) {
+                return std::string(type_desc);
+            }
             if (should_proxy(bare_class, current_class, opts)) {
                 return std::string(elem_start, '[') + "Ljava/lang/Object;";
             }
@@ -333,7 +369,11 @@ static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& /*p_in
         add_pi(bytecode::Opcode::dreturn);
     } else if (ret_desc[0] == 'L') {
         std::string bare_class = std::string(ret_desc.substr(1, ret_desc.size() - 2));
-        if (should_proxy(bare_class, current_class, opts)) {
+        if (bare_class.starts_with("java/") || bare_class.starts_with("javax/") || bare_class.starts_with("jdk/")) {
+            bytecode::u2 ret_cls = cp.find_or_add_class(bare_class);
+            add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{ret_cls});
+            add_pi(bytecode::Opcode::areturn);
+        } else if (should_proxy(bare_class, current_class, opts)) {
             add_pi(bytecode::Opcode::areturn);
         } else {
             bytecode::u2 ret_cls = cp.find_or_add_class(bare_class);
@@ -344,6 +384,12 @@ static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& /*p_in
         size_t elem_start = ret_desc.find_first_not_of('[');
         if (elem_start != std::string_view::npos && ret_desc[elem_start] == 'L') {
             std::string bare_class = std::string(ret_desc.substr(elem_start + 1, ret_desc.size() - elem_start - 2));
+            if (bare_class.starts_with("java/") || bare_class.starts_with("javax/") || bare_class.starts_with("jdk/")) {
+                bytecode::u2 ret_cls = cp.find_or_add_class(ret_desc);
+                add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{ret_cls});
+                add_pi(bytecode::Opcode::areturn);
+                return;
+            }
             if (should_proxy(bare_class, current_class, opts)) {
                 bytecode::u2 ret_cls = cp.find_or_add_class(std::string(elem_start, '[') + "Ljava/lang/Object;");
                 add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{ret_cls});
@@ -357,6 +403,119 @@ static void emit_unbox_or_cast_return(std::vector<bytecode::Instruction>& /*p_in
     } else {
         add_pi(bytecode::Opcode::areturn);
     }
+}
+
+// ---------------------------------------------------------------------------
+// MethodHandle-based proxy support.
+//
+// Steady-state dispatch goes through MethodHandle.invokeExact (exact,
+// signature-polymorphic INVOKEVIRTUAL on java/lang/invoke/MethodHandle)
+// instead of Method.invoke: no Object[] allocation, no boxing/unboxing of
+// primitives, and no InvocationTargetException wrapping. Handles are
+// resolved once on cache miss by shared lookup helpers living in the global
+// cache class (a random pool member per proxy) and cached in the global
+// Object[] cache like before. Only straight-line code + one ifnonnull per
+// proxy: verifier-safe on Java 8+.
+// ---------------------------------------------------------------------------
+
+template<typename F>
+static void emit_ldc_string(F&& add_pop, bytecode::ConstantPool& cp, const std::string& s) {
+    bytecode::u2 sidx = cp.find_or_add_string(s);
+    if (sidx <= 255) {
+        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{sidx});
+    } else {
+        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{sidx});
+    }
+}
+
+// Push the Class object for a field/method type descriptor.
+// Primitives (and V) map to Wrapper.TYPE; references/arrays via forName.
+template<typename F1, typename F2>
+static void emit_load_type_class(bytecode::ConstantPool& cp,
+                                 std::string_view tdesc,
+                                 F1&& add_pi, F2&& add_pop) {
+    (void)add_pi;
+    const char* box = nullptr;
+    if (tdesc.size() == 1) {
+        switch (tdesc[0]) {
+            case 'Z': box = "java/lang/Boolean"; break;
+            case 'B': box = "java/lang/Byte"; break;
+            case 'C': box = "java/lang/Character"; break;
+            case 'S': box = "java/lang/Short"; break;
+            case 'I': box = "java/lang/Integer"; break;
+            case 'J': box = "java/lang/Long"; break;
+            case 'F': box = "java/lang/Float"; break;
+            case 'D': box = "java/lang/Double"; break;
+            case 'V': box = "java/lang/Void"; break;
+            default: break;
+        }
+    }
+    if (box) {
+        bytecode::u2 fref = cp.find_or_add_fieldref(box, "TYPE", "Ljava/lang/Class;");
+        add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{fref});
+        return;
+    }
+    std::string dotted(tdesc);
+    if (dotted.size() >= 2 && dotted.front() == 'L' && dotted.back() == ';') {
+        // Class.forName needs the binary name (dots, no L...; wrapper).
+        dotted = dotted.substr(1, dotted.size() - 2);
+    }
+    std::replace(dotted.begin(), dotted.end(), '/', '.');
+    emit_ldc_string(add_pop, cp, dotted);
+    bytecode::u2 forName = cp.find_or_add_methodref("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
+    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{forName});
+}
+
+// Pool of shared MethodHandle lookup helpers emitted into the global cache
+// class at synthesis time. The method-shape pool (virtual/static members,
+// chosen per proxy) holds a randomized count in
+// [mh_lookup_helpers_min, mh_lookup_helpers_max]; the getter pool holds one
+// helper reserved on first static-field-proxy use. Each proxy calls a random
+// pool member so call sites spread across several callees.
+static size_t mh_lookup_name_counter = 0;
+
+enum class MhLookupKind { Virtual, Static, Getter };
+
+static const std::string& reserve_mh_lookup_name(PassContext& ctx, MhLookupKind kind) {
+    auto& pool = (kind == MhLookupKind::Getter) ? ctx.global_cache.mh_lookup_getters
+                 : (kind == MhLookupKind::Virtual) ? ctx.global_cache.mh_lookup_virtual
+                                                   : ctx.global_cache.mh_lookup_static;
+    if (!pool.empty()) {
+        return pool[static_cast<size_t>(ctx.rng()) % pool.size()];
+    }
+    if (kind == MhLookupKind::Getter) {
+        uint64_t salt = ctx.rng();
+        pool.push_back(RenamePass::generate_obfuscated_name(
+            mh_lookup_name_counter++, config::RenameMode::ConfusingLong, salt));
+        return pool[0];
+    }
+    // First method-shape use: fill the shared budget across virtual/static.
+    // At least one of each so later proxies of either kind are covered.
+    size_t mn = ctx.config.reflection_proxy.mh_lookup_helpers_min;
+    size_t mx = ctx.config.reflection_proxy.mh_lookup_helpers_max;
+    if (mx < mn) std::swap(mn, mx);
+    mn = std::max<size_t>(mn, 1);
+    mx = std::max<size_t>(mx, mn);
+    size_t total = mn + (mx > mn ? static_cast<size_t>(ctx.rng() % (mx - mn + 1)) : 0);
+    total = std::max<size_t>(total, 2);
+    uint64_t salt = ctx.rng();
+    auto add_name = [&](std::vector<std::string>& p) {
+        p.push_back(RenamePass::generate_obfuscated_name(
+            mh_lookup_name_counter++, config::RenameMode::ConfusingLong,
+            salt ^ (p.size() * 0x9E3779B9ULL)));
+    };
+    add_name(ctx.global_cache.mh_lookup_virtual);
+    add_name(ctx.global_cache.mh_lookup_static);
+    for (size_t i = 2; i < total; ++i) {
+        if ((ctx.rng() & 1u) == 0) {
+            add_name(ctx.global_cache.mh_lookup_virtual);
+        } else {
+            add_name(ctx.global_cache.mh_lookup_static);
+        }
+    }
+    auto& target = (kind == MhLookupKind::Virtual) ? ctx.global_cache.mh_lookup_virtual
+                                                   : ctx.global_cache.mh_lookup_static;
+    return target[static_cast<size_t>(ctx.rng()) % target.size()];
 }
 
 static std::string get_proxy_method_desc(const std::string& /*target_class*/, const std::string& target_desc, bool is_static, std::string_view current_class, const config::ReflectionProxyOptions& opts) {
@@ -385,11 +544,12 @@ static void synthesize_proxy_constructor(bytecode::ClassFile& cls,
     std::replace(dot_target_class.begin(), dot_target_class.end(), '/', '.');
 
     auto params = parse_proxy_params(ctor_desc);
+    std::string ret_desc = "L" + target_class + ";";
     std::string helper_desc = "(";
     for (const auto& p : params) {
         helper_desc += sanitize_type(p.desc, current_class, ctx.config.reflection_proxy);
     }
-    helper_desc += ")Ljava/lang/Object;";
+    helper_desc += ")" + ret_desc;
 
     bytecode::MethodInfo pm;
     pm.access_flags = (cls.is_interface() ? bytecode::access_flags::ACC_PUBLIC : bytecode::access_flags::ACC_PRIVATE) | 
@@ -398,11 +558,16 @@ static void synthesize_proxy_constructor(bytecode::ClassFile& cls,
     pm.name_index = cp.find_or_add_utf8(proxy_name);
     pm.descriptor_index = cp.find_or_add_utf8(helper_desc);
 
+    ctx.ensure_global_cache_name();
+    size_t slot = ctx.global_cache.get_or_create_slot("c#" + target_class + "#<init>" + ctor_desc);
+
     bytecode::u2 cls_forName = cp.find_or_add_methodref("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
     bytecode::u2 cls_getDeclaredConstructor = cp.find_or_add_methodref("java/lang/Class", "getDeclaredConstructor", "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;");
     bytecode::u2 ctor_setAccessible = cp.find_or_add_methodref("java/lang/reflect/Constructor", "setAccessible", "(Z)V");
     bytecode::u2 ctor_newInstance = cp.find_or_add_methodref("java/lang/reflect/Constructor", "newInstance", "([Ljava/lang/Object;)Ljava/lang/Object;");
     bytecode::u2 target_cls_str = cp.find_or_add_string(dot_target_class);
+    bytecode::u2 cache_fref = cp.find_or_add_fieldref(ctx.global_cache.class_name, ctx.global_cache.field_name, "[Ljava/lang/Object;");
+    bytecode::u2 ctor_cls = cp.find_or_add_class("java/lang/reflect/Constructor");
 
     std::vector<bytecode::Instruction> p_instrs;
     auto add_pi = [&](bytecode::Opcode op) {
@@ -420,7 +585,22 @@ static void synthesize_proxy_constructor(bytecode::ClassFile& cls,
         p_instrs.push_back(i);
     };
 
-    // 1. Class<?> c = Class.forName("TargetClass");
+    // 1. Check cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+
+    size_t if_cached_idx = p_instrs.size();
+    bytecode::Instruction if_cached_inst;
+    if_cached_inst.offset = static_cast<bytecode::u4>(-1);
+    if_cached_inst.opcode = bytecode::Opcode::ifnonnull;
+    if_cached_inst.operand = bytecode::Branch16Operand{0, 0};
+    p_instrs.push_back(if_cached_inst);
+
+    // 2. Cache Miss:
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+
     if (target_cls_str <= 255) {
         add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_cls_str});
     } else {
@@ -428,16 +608,28 @@ static void synthesize_proxy_constructor(bytecode::ClassFile& cls,
     }
     add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{cls_forName});
 
-    // 2. Class<?>[] paramTypes
     emit_build_param_types(p_instrs, cp, params, add_pi, add_pop);
-
-    // 3. Constructor<?> ctor = c.getDeclaredConstructor(paramTypes);
     add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{cls_getDeclaredConstructor});
 
-    // ctor.setAccessible(true);
     add_pi(bytecode::Opcode::dup);
     add_pi(bytecode::Opcode::iconst_1);
     add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{ctor_setAccessible});
+
+    add_pi(bytecode::Opcode::aastore);
+
+    // 3. L_HAVE_TARGET:
+    uint32_t bci_have_target = static_cast<uint32_t>(p_instrs.size() + 0x60000000);
+    p_instrs[if_cached_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_have_target)};
+
+    bytecode::Instruction load_cache_inst;
+    load_cache_inst.offset = bci_have_target;
+    load_cache_inst.opcode = bytecode::Opcode::getstatic;
+    load_cache_inst.operand = bytecode::CpIndexOperand{cache_fref};
+    p_instrs.push_back(load_cache_inst);
+
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+    add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{ctor_cls});
 
     // 4. Object[] args
     emit_build_args_array(p_instrs, cp, params, 0, add_pi, add_pop);
@@ -445,7 +637,9 @@ static void synthesize_proxy_constructor(bytecode::ClassFile& cls,
     // 5. Object res = ctor.newInstance(args);
     add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{ctor_newInstance});
 
-    // 6. Return Object directly without checkcast
+    // 6. Cast to target class and return
+    bytecode::u2 target_cls = cp.find_or_add_class(target_class);
+    add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{target_cls});
     add_pi(bytecode::Opcode::areturn);
 
     bytecode::AttrCode p_code;
@@ -508,7 +702,7 @@ static bytecode::u2 get_or_create_ann_decryptor(bytecode::ClassFile& cls) {
 static void synthesize_proxy_class_literal(bytecode::ClassFile& cls,
                                           const std::string& proxy_name,
                                           const std::string& target_class,
-                                          PassContext& /*ctx*/) {
+                                          PassContext& ctx) {
     auto& cp = cls.constant_pool();
     std::string dot_target_class = target_class;
     std::replace(dot_target_class.begin(), dot_target_class.end(), '/', '.');
@@ -520,34 +714,71 @@ static void synthesize_proxy_class_literal(bytecode::ClassFile& cls,
     pm.name_index = cp.find_or_add_utf8(proxy_name);
     pm.descriptor_index = cp.find_or_add_utf8("()Ljava/lang/Class;");
 
+    ctx.ensure_global_cache_name();
+    size_t slot = ctx.global_cache.get_or_create_slot("cls#" + target_class);
+
     bytecode::u2 cls_forName = cp.find_or_add_methodref("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
     bytecode::u2 target_cls_str = cp.find_or_add_string(dot_target_class);
+    bytecode::u2 cache_fref = cp.find_or_add_fieldref(ctx.global_cache.class_name, ctx.global_cache.field_name, "[Ljava/lang/Object;");
+    bytecode::u2 class_cls = cp.find_or_add_class("java/lang/Class");
 
     std::vector<bytecode::Instruction> p_instrs;
-    bytecode::Instruction ldc_i;
-    ldc_i.offset = 0;
+    auto add_pi = [&](bytecode::Opcode op) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = op;
+        i.operand = bytecode::NoOperand{};
+        p_instrs.push_back(i);
+    };
+    auto add_pop = [&](bytecode::Opcode op, bytecode::InstructionOperand operand) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = op;
+        i.operand = operand;
+        p_instrs.push_back(i);
+    };
+
+    // 1. Check cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+
+    size_t if_cached_idx = p_instrs.size();
+    bytecode::Instruction if_cached_inst;
+    if_cached_inst.offset = static_cast<bytecode::u4>(-1);
+    if_cached_inst.opcode = bytecode::Opcode::ifnonnull;
+    if_cached_inst.operand = bytecode::Branch16Operand{0, 0};
+    p_instrs.push_back(if_cached_inst);
+
+    // 2. Cache Miss:
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+
     if (target_cls_str <= 255) {
-        ldc_i.opcode = bytecode::Opcode::ldc;
+        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_cls_str});
     } else {
-        ldc_i.opcode = bytecode::Opcode::ldc_w;
+        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{target_cls_str});
     }
-    ldc_i.operand = bytecode::CpIndexOperand{target_cls_str};
-    p_instrs.push_back(ldc_i);
+    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{cls_forName});
+    add_pi(bytecode::Opcode::aastore);
 
-    bytecode::Instruction call_i;
-    call_i.offset = 1;
-    call_i.opcode = bytecode::Opcode::invokestatic;
-    call_i.operand = bytecode::CpIndexOperand{cls_forName};
-    p_instrs.push_back(call_i);
+    // 3. L_HAVE_TARGET:
+    uint32_t bci_have_target = static_cast<uint32_t>(p_instrs.size() + 0x60000000);
+    p_instrs[if_cached_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_have_target)};
 
-    bytecode::Instruction ret_i;
-    ret_i.offset = 2;
-    ret_i.opcode = bytecode::Opcode::areturn;
-    ret_i.operand = bytecode::NoOperand{};
-    p_instrs.push_back(ret_i);
+    bytecode::Instruction load_cache_inst;
+    load_cache_inst.offset = bci_have_target;
+    load_cache_inst.opcode = bytecode::Opcode::getstatic;
+    load_cache_inst.operand = bytecode::CpIndexOperand{cache_fref};
+    p_instrs.push_back(load_cache_inst);
+
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+    add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{class_cls});
+    add_pi(bytecode::Opcode::areturn);
 
     bytecode::AttrCode p_code;
-    p_code.max_stack = 2;
+    p_code.max_stack = 4;
     p_code.max_locals = 0;
     bytecode::update_code(p_code, p_instrs, cp);
 
@@ -576,18 +807,18 @@ static void synthesize_proxy_method(bytecode::ClassFile& cls,
     std::string helper_desc = get_proxy_method_desc(target_class, target_desc, is_static, current_class, ctx.config.reflection_proxy);
 
     bytecode::MethodInfo pm;
-    pm.access_flags = bytecode::access_flags::ACC_PRIVATE | 
+    pm.access_flags = (cls.is_interface() ? bytecode::access_flags::ACC_PUBLIC : bytecode::access_flags::ACC_PRIVATE) | 
                       bytecode::access_flags::ACC_STATIC | 
                       bytecode::access_flags::ACC_SYNTHETIC;
     pm.name_index = cp.find_or_add_utf8(proxy_name);
     pm.descriptor_index = cp.find_or_add_utf8(helper_desc);
 
-    bytecode::u2 cls_forName = cp.find_or_add_methodref("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
-    bytecode::u2 cls_getMethod = cp.find_or_add_methodref("java/lang/Class", "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-    bytecode::u2 method_invoke = cp.find_or_add_methodref("java/lang/reflect/Method", "invoke", "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+    ctx.ensure_global_cache_name();
+    size_t slot = ctx.global_cache.get_or_create_slot("m#" + target_class + "#" + target_method + target_desc);
 
-    bytecode::u2 target_cls_str = cp.find_or_add_string(dot_target_class);
-    bytecode::u2 target_m_str = cp.find_or_add_string(target_method);
+    bytecode::u2 mh_cls = cp.find_or_add_class("java/lang/invoke/MethodHandle");
+
+    bytecode::u2 cache_fref = cp.find_or_add_fieldref(ctx.global_cache.class_name, ctx.global_cache.field_name, "[Ljava/lang/Object;");
 
     std::vector<bytecode::Instruction> p_instrs;
     auto add_pi = [&](bytecode::Opcode op) {
@@ -605,40 +836,111 @@ static void synthesize_proxy_method(bytecode::ClassFile& cls,
         p_instrs.push_back(i);
     };
 
-    // 1. Class<?> c = Class.forName("TargetClass");
-    if (target_cls_str <= 255) {
-        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_cls_str});
-    } else {
-        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{target_cls_str});
-    }
-    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{cls_forName});
+    // Exact invoke descriptor uses ORIGINAL (unsanitized) types.
+    std::string exact_desc = "(";
+    if (!is_static) exact_desc += "L" + target_class + ";";
+    for (const auto& p : params) exact_desc += p.desc;
+    exact_desc += ")" + ret_desc;
+    bytecode::u2 invoke_exact_mref = cp.find_or_add_methodref(
+        "java/lang/invoke/MethodHandle", "invokeExact", exact_desc);
 
-    // 2. Method name string
-    if (target_m_str <= 255) {
-        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_m_str});
-    } else {
-        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{target_m_str});
-    }
-
-    // 3. Class<?>[] paramTypes
-    emit_build_param_types(p_instrs, cp, params, add_pi, add_pop);
-
-    // 4. Method m = c.getMethod(name, paramTypes);
-    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{cls_getMethod});
-
-    // 5. Target instance: aconst_null for static, aload_0 for virtual
-    if (is_static) {
-        add_pi(bytecode::Opcode::aconst_null);
-    } else {
-        add_pi(bytecode::Opcode::aload_0);
-    }
-
-    // 6. Object[] args
+    // Temp local after the declared params for the resolved handle.
     bytecode::u1 slot_offset = is_static ? 0 : 1;
-    emit_build_args_array(p_instrs, cp, params, slot_offset, add_pi, add_pop);
+    bytecode::u2 param_end = slot_offset;
+    if (!params.empty()) {
+        const auto& last = params.back();
+        param_end = static_cast<bytecode::u2>(last.slot + slot_offset + ((last.desc == "J" || last.desc == "D") ? 2 : 1));
+    }
+    bytecode::u1 L_mh = static_cast<bytecode::u1>(param_end);
 
-    // 7. Method.invoke(target, args) -> Object
-    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{method_invoke});
+    // Shared cache-class lookup helper: random pool member already bound to
+    // findVirtual (instance) or findStatic (static). The ldc name strings
+    // stay here so rename remapping + string encryption still apply per proxy.
+    const std::string& lookup_name = reserve_mh_lookup_name(
+        ctx, is_static ? MhLookupKind::Static : MhLookupKind::Virtual);
+    bytecode::u2 lookup_mref = cp.find_or_add_methodref(
+        ctx.global_cache.class_name, lookup_name, kMhLookupMethodDesc);
+
+    auto add_aload = [&](bytecode::u1 idx) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = bytecode::Opcode::aload;
+        i.operand = bytecode::LocalVarOperand{idx};
+        p_instrs.push_back(i);
+    };
+    auto add_astore = [&](bytecode::u1 idx) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = bytecode::Opcode::astore;
+        i.operand = bytecode::LocalVarOperand{idx};
+        p_instrs.push_back(i);
+    };
+
+    // 1. Check cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+
+    size_t if_cached_idx = p_instrs.size();
+    bytecode::Instruction if_cached_inst;
+    if_cached_inst.offset = static_cast<bytecode::u4>(-1);
+    if_cached_inst.opcode = bytecode::Opcode::ifnonnull;
+    if_cached_inst.operand = bytecode::Branch16Operand{0, 0};
+    p_instrs.push_back(if_cached_inst);
+
+    // 2. Cache Miss: mh = CacheHelper.lookup(className, memberName, rtype, ptypes)
+    // The ldc name strings are remapped by RenamePass and encrypted by
+    // StringEncryptPass downstream, exactly as before.
+    emit_ldc_string(add_pop, cp, dot_target_class);
+    emit_ldc_string(add_pop, cp, target_method);
+    emit_load_type_class(cp, ret_desc, add_pi, add_pop);
+    emit_build_param_types(p_instrs, cp, params, add_pi, add_pop);
+    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{lookup_mref});
+    add_astore(L_mh);
+
+    // Store into cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_aload(L_mh);
+    add_pi(bytecode::Opcode::aastore);
+
+    // 3. L_HAVE_TARGET:
+    uint32_t bci_have_target = static_cast<uint32_t>(p_instrs.size() + 0x60000000);
+    p_instrs[if_cached_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_have_target)};
+
+    bytecode::Instruction load_cache_inst;
+    load_cache_inst.offset = bci_have_target;
+    load_cache_inst.opcode = bytecode::Opcode::getstatic;
+    load_cache_inst.operand = bytecode::CpIndexOperand{cache_fref};
+    p_instrs.push_back(load_cache_inst);
+
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+    add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{mh_cls});
+
+    // 4. Push exact-typed args: receiver (virtual) + params, casting
+    // sanitized Object locals back to their original types for invokeExact.
+    bytecode::u2 target_cls = cp.find_or_add_class(target_class);
+    if (!is_static) {
+        add_pi(bytecode::Opcode::aload_0);
+        add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{target_cls});
+    }
+    for (const auto& param : params) {
+        add_pop(param.load_op, bytecode::LocalVarOperand{static_cast<bytecode::u1>(param.slot + slot_offset)});
+        if (sanitize_type(param.desc, current_class, ctx.config.reflection_proxy) != param.desc) {
+            // CpClass entries need the bare internal name (arrays stay as descriptors).
+            std::string check_name = param.desc;
+            if (check_name.size() >= 2 && check_name.front() == 'L' && check_name.back() == ';') {
+                check_name = check_name.substr(1, check_name.size() - 2);
+            }
+            bytecode::u2 exact_cls = cp.find_or_add_class(check_name);
+            add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{exact_cls});
+        }
+    }
+
+    // 5. Exact-typed mh.invokeExact(...) — no boxing, no unboxing, no
+    // InvocationTargetException wrapping (original exceptions propagate).
+    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{invoke_exact_mref});
 
     bool is_annotation_string = false;
     if (ctx.config.string_encryption.enabled && ctx.config.string_encryption.encrypt_annotation_strings && ctx.config.rename.enabled) {
@@ -655,18 +957,27 @@ static void synthesize_proxy_method(bytecode::ClassFile& cls,
         bytecode::u2 dec_mref = get_or_create_ann_decryptor(cls);
         add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{dec_mref});
         add_pi(bytecode::Opcode::areturn);
+    } else if (ret_desc == "V") {
+        add_pi(bytecode::Opcode::return_op);
+    } else if (ret_desc.size() == 1) {
+        // Primitive returns come back exact from invokeExact: no unboxing.
+        if (ret_desc == "J") {
+            add_pi(bytecode::Opcode::lreturn);
+        } else if (ret_desc == "F") {
+            add_pi(bytecode::Opcode::freturn);
+        } else if (ret_desc == "D") {
+            add_pi(bytecode::Opcode::dreturn);
+        } else {
+            add_pi(bytecode::Opcode::ireturn);
+        }
     } else {
-        // 8. Unbox / cast return
+        // 7. Cast reference return (exact type already; keeps rename-driven checks)
         emit_unbox_or_cast_return(p_instrs, cp, ret_desc, current_class, ctx.config.reflection_proxy, add_pi, add_pop);
     }
 
     bytecode::AttrCode p_code;
-    p_code.max_stack = 8;
-    bytecode::u2 max_loc = is_static ? 0 : 1;
-    if (!params.empty()) {
-        max_loc = static_cast<bytecode::u2>(params.back().slot + slot_offset + (params.back().desc == "J" || params.back().desc == "D" ? 2 : 1));
-    }
-    p_code.max_locals = std::max<bytecode::u2>(1, max_loc);
+    p_code.max_stack = static_cast<bytecode::u2>(8 + params.size());
+    p_code.max_locals = static_cast<bytecode::u2>(param_end + 1);
     bytecode::update_code(p_code, p_instrs, cp);
 
     bytecode::Attribute pm_attr;
@@ -697,12 +1008,24 @@ static void synthesize_proxy_field_getter(bytecode::ClassFile& cls,
     pm.name_index = cp.find_or_add_utf8(proxy_name);
     pm.descriptor_index = cp.find_or_add_utf8(helper_desc);
 
-    bytecode::u2 cls_forName = cp.find_or_add_methodref("java/lang/Class", "forName", "(Ljava/lang/String;)Ljava/lang/Class;");
-    bytecode::u2 cls_getField = cp.find_or_add_methodref("java/lang/Class", "getField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
-    bytecode::u2 field_get = cp.find_or_add_methodref("java/lang/reflect/Field", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    ctx.ensure_global_cache_name();
+    size_t slot = ctx.global_cache.get_or_create_slot("f#" + target_class + "#" + target_field);
 
-    bytecode::u2 target_cls_str = cp.find_or_add_string(dot_target_class);
-    bytecode::u2 target_f_str = cp.find_or_add_string(target_field);
+    bytecode::u2 mh_cls = cp.find_or_add_class("java/lang/invoke/MethodHandle");
+    // Exact getter descriptor uses the ORIGINAL field type: no boxing.
+    std::string exact_desc = "()" + target_desc;
+    bytecode::u2 invoke_exact_mref = cp.find_or_add_methodref(
+        "java/lang/invoke/MethodHandle", "invokeExact", exact_desc);
+
+    bytecode::u2 cache_fref = cp.find_or_add_fieldref(ctx.global_cache.class_name, ctx.global_cache.field_name, "[Ljava/lang/Object;");
+
+    // Single temp local for the resolved handle.
+    bytecode::u1 L_mh = 0;
+
+    // Shared cache-class getter helper (reserved pool name).
+    const std::string& lookup_name = reserve_mh_lookup_name(ctx, MhLookupKind::Getter);
+    bytecode::u2 lookup_mref = cp.find_or_add_methodref(
+        ctx.global_cache.class_name, lookup_name, kMhLookupGetterDesc);
 
     std::vector<bytecode::Instruction> p_instrs;
     auto add_pi = [&](bytecode::Opcode op) {
@@ -719,33 +1042,77 @@ static void synthesize_proxy_field_getter(bytecode::ClassFile& cls,
         i.operand = operand;
         p_instrs.push_back(i);
     };
+    auto add_aload = [&](bytecode::u1 idx) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = bytecode::Opcode::aload;
+        i.operand = bytecode::LocalVarOperand{idx};
+        p_instrs.push_back(i);
+    };
+    auto add_astore = [&](bytecode::u1 idx) {
+        bytecode::Instruction i;
+        i.offset = static_cast<bytecode::u4>(-1);
+        i.opcode = bytecode::Opcode::astore;
+        i.operand = bytecode::LocalVarOperand{idx};
+        p_instrs.push_back(i);
+    };
 
-    // 1. Class<?> c = Class.forName("TargetClass");
-    if (target_cls_str <= 255) {
-        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_cls_str});
+    // 1. Check cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+
+    size_t if_cached_idx = p_instrs.size();
+    bytecode::Instruction if_cached_inst;
+    if_cached_inst.offset = static_cast<bytecode::u4>(-1);
+    if_cached_inst.opcode = bytecode::Opcode::ifnonnull;
+    if_cached_inst.operand = bytecode::Branch16Operand{0, 0};
+    p_instrs.push_back(if_cached_inst);
+
+    // 2. Cache Miss: mh = CacheHelper.lookupGetter(className, fieldName, fieldType)
+    emit_ldc_string(add_pop, cp, dot_target_class);
+    emit_ldc_string(add_pop, cp, target_field);
+    emit_load_type_class(cp, target_desc, add_pi, add_pop);
+    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{lookup_mref});
+    add_astore(L_mh);
+
+    // Store into cache
+    add_pop(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_aload(L_mh);
+    add_pi(bytecode::Opcode::aastore);
+
+    // 3. L_HAVE_TARGET:
+    uint32_t bci_have_target = static_cast<uint32_t>(p_instrs.size() + 0x60000000);
+    p_instrs[if_cached_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_have_target)};
+
+    bytecode::Instruction load_cache_inst;
+    load_cache_inst.offset = bci_have_target;
+    load_cache_inst.opcode = bytecode::Opcode::getstatic;
+    load_cache_inst.operand = bytecode::CpIndexOperand{cache_fref};
+    p_instrs.push_back(load_cache_inst);
+
+    emit_push_int(add_pop, static_cast<uint32_t>(slot), cp);
+    add_pi(bytecode::Opcode::aaload);
+    add_pop(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{mh_cls});
+
+    // Exact-typed val = mh.invokeExact() — no boxing.
+    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{invoke_exact_mref});
+
+    // 6. Return (primitives direct; references keep rename-driven checks)
+    if (target_desc.size() == 1) {
+        if (target_desc == "J") {
+            add_pi(bytecode::Opcode::lreturn);
+        } else if (target_desc == "F") {
+            add_pi(bytecode::Opcode::freturn);
+        } else if (target_desc == "D") {
+            add_pi(bytecode::Opcode::dreturn);
+        } else {
+            add_pi(bytecode::Opcode::ireturn);
+        }
     } else {
-        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{target_cls_str});
+        emit_unbox_or_cast_return(p_instrs, cp, target_desc, current_class, ctx.config.reflection_proxy, add_pi, add_pop);
     }
-    add_pop(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{cls_forName});
-
-    // 2. Field name string
-    if (target_f_str <= 255) {
-        add_pop(bytecode::Opcode::ldc, bytecode::CpIndexOperand{target_f_str});
-    } else {
-        add_pop(bytecode::Opcode::ldc_w, bytecode::CpIndexOperand{target_f_str});
-    }
-
-    // 3. Field f = c.getField("fieldName");
-    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{cls_getField});
-
-    // 4. aconst_null
-    add_pi(bytecode::Opcode::aconst_null);
-
-    // 5. Object val = f.get(null);
-    add_pop(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{field_get});
-
-    // 6. Unbox / cast
-    emit_unbox_or_cast_return(p_instrs, cp, target_desc, current_class, ctx.config.reflection_proxy, add_pi, add_pop);
 
     bytecode::AttrCode p_code;
     p_code.max_stack = 4;
@@ -818,11 +1185,12 @@ void ReflectionProxyPass::transform_invocations(bytecode::AttrCode& code, byteco
                 synthesize_proxy_constructor(cls, proxy_name, target_class, ctor_desc, ctx);
 
                 auto params = parse_proxy_params(ctor_desc);
+                std::string ret_desc = "L" + target_class + ";";
                 std::string helper_desc = "(";
                 for (const auto& p : params) {
                     helper_desc += sanitize_type(p.desc, current_class, ctx.config.reflection_proxy);
                 }
-                helper_desc += ")Ljava/lang/Object;";
+                helper_desc += ")" + ret_desc;
 
                 bytecode::u2 proxy_mref = cp.find_or_add_methodref(current_class, proxy_name, helper_desc);
                 instructions[init_idx].opcode = bytecode::Opcode::invokestatic;
@@ -973,6 +1341,9 @@ void ReflectionProxyPass::transform_invocations(bytecode::AttrCode& code, byteco
             if (const auto* cp_idx = std::get_if<bytecode::CpIndexOperand>(&instr.operand)) {
                 if (const auto* ce = cp.get_if<bytecode::CpClass>(cp_idx->index)) {
                     std::string target_class(cp.get_utf8(ce->name_index));
+                    if (target_class.starts_with("java/") || target_class.starts_with("javax/") || target_class.starts_with("jdk/")) {
+                        continue;
+                    }
                     if (should_proxy(target_class, current_class, ctx.config.reflection_proxy)) {
                         bool safe_to_eliminate = false;
                         for (size_t next = idx + 1; next < instructions.size(); ++next) {
@@ -1000,9 +1371,29 @@ void ReflectionProxyPass::transform_invocations(bytecode::AttrCode& code, byteco
         }
     }
 
+    std::unordered_set<std::string> protected_classes;
+    protected_classes.insert("java/lang/Throwable");
+    protected_classes.insert("java/lang/Exception");
+    protected_classes.insert("java/lang/RuntimeException");
+    protected_classes.insert("java/lang/Error");
+    for (const auto& entry : code.exception_table) {
+        if (entry.catch_type != 0) {
+            protected_classes.insert(std::string(cp.get_class_name(entry.catch_type)));
+        }
+    }
+
     auto remap_proxied_classes = [&](bytecode::u2 class_idx) -> bytecode::u2 {
         if (const auto* ce = cp.get_if<bytecode::CpClass>(class_idx)) {
             std::string cls_name(cp.get_utf8(ce->name_index));
+            if (protected_classes.count(cls_name) ||
+                cls_name == "java/lang/Throwable" ||
+                cls_name == "java/lang/Exception" ||
+                cls_name == "java/lang/RuntimeException" ||
+                cls_name == "java/lang/Error" ||
+                cls_name.ends_with("Exception") ||
+                cls_name.ends_with("Error")) {
+                return class_idx;
+            }
             if (should_proxy(cls_name, current_class, ctx.config.reflection_proxy)) {
                 return cp.find_or_add_class("java/lang/Object");
             }

@@ -1,6 +1,7 @@
 #include "engine/obfuscator_engine.hpp"
 #include "reporter/ndjson_reporter.hpp"
 #include "reporter/console_reporter.hpp"
+#include "config/keep_rule.hpp"
 #include <chrono>
 
 namespace obf::engine {
@@ -52,6 +53,21 @@ bool ObfuscatorEngine::run() {
                   std::to_string(archive.resource_count()) + " resources from archive.");
 
     passes::PassContext ctx(archive, m_config, *reporter, m_stats);
+
+    // Parse and validate keep rules before any pass runs.
+    if (!m_config.keep_rules.empty()) {
+        for (const auto& raw : m_config.keep_rules) {
+            std::string rule_err;
+            auto rule = config::parse_keep_rule(raw, rule_err);
+            if (!rule) {
+                reporter->error("Invalid keep rule '" + raw + "': " + rule_err);
+                return false;
+            }
+            ctx.keep_rules.push_back(std::move(*rule));
+        }
+        reporter->log(reporter::LogLevel::Info, "Loaded " + std::to_string(ctx.keep_rules.size()) +
+                      " keep rule(s); matching classes/members are exempt from shrinking and renaming.");
+    }
     build_hierarchy(ctx.hierarchy, archive);
 
     auto pipeline = passes::PassPipeline::build_from_config(m_config);

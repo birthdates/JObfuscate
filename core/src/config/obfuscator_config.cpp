@@ -157,6 +157,7 @@ std::string ObfuscatorConfig::to_json() const {
     j["target_packages"] = target_packages;
     j["exclude_packages"] = exclude_packages;
     j["exclude_classes"] = exclude_classes;
+    j["keep_rules"] = keep_rules;
     j["ignore_dependencies"] = ignore_dependencies;
 
     // Strip options
@@ -166,7 +167,26 @@ std::string ObfuscatorConfig::to_json() const {
         {"strip_source_file", strip.strip_source_file},
         {"strip_source_debug", strip.strip_source_debug},
         {"strip_signatures", strip.strip_signatures},
-        {"strip_parameters", strip.strip_parameters}
+        {"strip_parameters", strip.strip_parameters},
+        {"strip_kotlin_metadata", strip.strip_kotlin_metadata}
+    };
+
+    // Shrink options
+    j["shrink"] = {
+        {"enabled", shrink.enabled},
+        {"shrink_classes", shrink.shrink_classes},
+        {"shrink_methods", shrink.shrink_methods},
+        {"shrink_fields", shrink.shrink_fields},
+        {"remove_unused_attributes", shrink.remove_unused_attributes}
+    };
+
+    // Class encryption options
+    j["class_encryption"] = {
+        {"enabled", class_encryption.enabled},
+        {"launcher_class", class_encryption.launcher_class},
+        {"resource_name", class_encryption.resource_name},
+        {"main_class", class_encryption.main_class},
+        {"memory_scrubbing", class_encryption.memory_scrubbing}
     };
 
     // Rename options
@@ -179,6 +199,9 @@ std::string ObfuscatorConfig::to_json() const {
         {"rename_fields", rename.rename_fields},
         {"obfuscate_enums", rename.obfuscate_enums},
         {"keep_main_class", rename.keep_main_class},
+        {"scramble_methods", rename.scramble_methods},
+        {"remap_resources", rename.remap_resources},
+        {"resource_patterns", rename.resource_patterns},
         {"mode", static_cast<int>(rename.mode)},
         {"exclusions", rename.exclusions}
     };
@@ -193,6 +216,7 @@ std::string ObfuscatorConfig::to_json() const {
         {"strings_per_decryptor_min", string_encryption.strings_per_decryptor_min},
         {"strings_per_decryptor_max", string_encryption.strings_per_decryptor_max},
         {"encrypt_annotation_strings", string_encryption.encrypt_annotation_strings},
+        {"split_keys", string_encryption.split_keys},
         {"exclusions", string_encryption.exclusions}
     };
 
@@ -206,7 +230,15 @@ std::string ObfuscatorConfig::to_json() const {
         {"enabled", control_flow.enabled},
         {"insert_opaque_predicates", control_flow.insert_opaque_predicates},
         {"flatten_blocks", control_flow.flatten_blocks},
-        {"flattening_intensity", control_flow.flattening_intensity}
+        {"flattening_intensity", control_flow.flattening_intensity},
+        {"decompiler_traps", control_flow.decompiler_traps},
+        {"exception_dispatch", control_flow.exception_dispatch}
+    };
+
+    // Indy call site options
+    j["indy_call_sites"] = {
+        {"enabled", indy_call_sites.enabled},
+        {"target_packages", indy_call_sites.target_packages}
     };
 
     // Reflection proxy options
@@ -214,7 +246,9 @@ std::string ObfuscatorConfig::to_json() const {
         {"enabled", reflection_proxy.enabled},
         {"proxy_invocations", reflection_proxy.proxy_invocations},
         {"proxy_java_imports", reflection_proxy.proxy_java_imports},
-        {"import_packages", reflection_proxy.import_packages}
+        {"import_packages", reflection_proxy.import_packages},
+        {"mh_lookup_helpers_min", reflection_proxy.mh_lookup_helpers_min},
+        {"mh_lookup_helpers_max", reflection_proxy.mh_lookup_helpers_max}
     };
 
     // Number obfuscation options
@@ -223,8 +257,25 @@ std::string ObfuscatorConfig::to_json() const {
         {"intensity", number_obfuscation.intensity}
     };
 
+    // Condy options
+    j["condy"] = {
+        {"enabled", condy.enabled},
+        {"encrypt_constants", condy.encrypt_constants}
+    };
+
+    // Decompiler deterrence options
+    j["decompiler_deterrence"] = {
+        {"enabled", decompiler_deterrence.enabled},
+        {"overload_return_types", decompiler_deterrence.overload_return_types},
+        {"synthetic_bridge_tags", decompiler_deterrence.synthetic_bridge_tags},
+        {"phantom_inner_classes", decompiler_deterrence.phantom_inner_classes},
+        {"custom_attributes", decompiler_deterrence.custom_attributes},
+        {"scramble_method_order", decompiler_deterrence.scramble_method_order}
+    };
+
     j["input_jar"] = input_jar.string();
     j["output_jar"] = output_jar.string();
+    j["mapping_file"] = mapping_file.string();
     if (seed.has_value()) j["seed"] = *seed;
     j["json_stream_mode"] = json_stream_mode;
     j["verbose"] = verbose;
@@ -248,6 +299,7 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
         if (j.contains("target_packages")) cfg.target_packages = j["target_packages"].get<std::vector<std::string>>();
         if (j.contains("exclude_packages")) cfg.exclude_packages = j["exclude_packages"].get<std::vector<std::string>>();
         if (j.contains("exclude_classes")) cfg.exclude_classes = j["exclude_classes"].get<std::vector<std::string>>();
+        if (j.contains("keep_rules")) cfg.keep_rules = j["keep_rules"].get<std::vector<std::string>>();
         if (j.contains("ignore_dependencies")) cfg.ignore_dependencies = j["ignore_dependencies"].get<bool>();
 
         if (j.contains("strip")) {
@@ -258,6 +310,25 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             if (s.contains("strip_source_debug")) cfg.strip.strip_source_debug = s["strip_source_debug"];
             if (s.contains("strip_signatures")) cfg.strip.strip_signatures = s["strip_signatures"];
             if (s.contains("strip_parameters")) cfg.strip.strip_parameters = s["strip_parameters"];
+            if (s.contains("strip_kotlin_metadata")) cfg.strip.strip_kotlin_metadata = s["strip_kotlin_metadata"];
+        }
+
+        if (j.contains("shrink")) {
+            const auto& sh = j["shrink"];
+            if (sh.contains("enabled")) cfg.shrink.enabled = sh["enabled"];
+            if (sh.contains("shrink_classes")) cfg.shrink.shrink_classes = sh["shrink_classes"];
+            if (sh.contains("shrink_methods")) cfg.shrink.shrink_methods = sh["shrink_methods"];
+            if (sh.contains("shrink_fields")) cfg.shrink.shrink_fields = sh["shrink_fields"];
+            if (sh.contains("remove_unused_attributes")) cfg.shrink.remove_unused_attributes = sh["remove_unused_attributes"];
+        }
+
+        if (j.contains("class_encryption")) {
+            const auto& ce = j["class_encryption"];
+            if (ce.contains("enabled")) cfg.class_encryption.enabled = ce["enabled"];
+            if (ce.contains("launcher_class")) cfg.class_encryption.launcher_class = ce["launcher_class"].get<std::string>();
+            if (ce.contains("resource_name")) cfg.class_encryption.resource_name = ce["resource_name"].get<std::string>();
+            if (ce.contains("main_class")) cfg.class_encryption.main_class = ce["main_class"].get<std::string>();
+            if (ce.contains("memory_scrubbing")) cfg.class_encryption.memory_scrubbing = ce["memory_scrubbing"];
         }
 
         if (j.contains("rename")) {
@@ -270,6 +341,9 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             if (r.contains("rename_fields")) cfg.rename.rename_fields = r["rename_fields"];
             if (r.contains("obfuscate_enums")) cfg.rename.obfuscate_enums = r["obfuscate_enums"];
             if (r.contains("keep_main_class")) cfg.rename.keep_main_class = r["keep_main_class"];
+            if (r.contains("scramble_methods")) cfg.rename.scramble_methods = r["scramble_methods"];
+            if (r.contains("remap_resources")) cfg.rename.remap_resources = r["remap_resources"];
+            if (r.contains("resource_patterns")) cfg.rename.resource_patterns = r["resource_patterns"].get<std::vector<std::string>>();
             if (r.contains("mode")) {
                 if (r["mode"].is_number()) {
                     cfg.rename.mode = static_cast<RenameMode>(r["mode"].get<int>());
@@ -297,7 +371,7 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
                     cfg.string_encryption.algorithm = static_cast<StringEncryptionAlgorithm>(se["algorithm"].get<int>());
                 } else if (se["algorithm"].is_string()) {
                     std::string a = se["algorithm"].get<std::string>();
-                    if (a == "XorRollingKey" || a == "XorShift") cfg.string_encryption.algorithm = StringEncryptionAlgorithm::XorRollingKey;
+                    if (a == "XorRollingKey" || a == "XorShift" || a == "xor") cfg.string_encryption.algorithm = StringEncryptionAlgorithm::XorRollingKey;
                     else cfg.string_encryption.algorithm = StringEncryptionAlgorithm::MultiLayerCrypto;
                 }
             }
@@ -325,6 +399,7 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
                 }
             }
             if (se.contains("encrypt_annotation_strings")) cfg.string_encryption.encrypt_annotation_strings = se["encrypt_annotation_strings"];
+            if (se.contains("split_keys")) cfg.string_encryption.split_keys = se["split_keys"];
             if (se.contains("exclusions")) cfg.string_encryption.exclusions = se["exclusions"].get<std::vector<std::string>>();
         }
 
@@ -333,6 +408,8 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             if (cf.contains("enabled")) cfg.control_flow.enabled = cf["enabled"];
             if (cf.contains("insert_opaque_predicates")) cfg.control_flow.insert_opaque_predicates = cf["insert_opaque_predicates"];
             if (cf.contains("flatten_blocks")) cfg.control_flow.flatten_blocks = cf["flatten_blocks"];
+            if (cf.contains("decompiler_traps")) cfg.control_flow.decompiler_traps = cf["decompiler_traps"];
+            if (cf.contains("exception_dispatch")) cfg.control_flow.exception_dispatch = cf["exception_dispatch"];
             if (cf.contains("flattening_intensity")) {
                 if (cf["flattening_intensity"].is_number()) {
                     cfg.control_flow.flattening_intensity = cf["flattening_intensity"].get<int>();
@@ -342,6 +419,12 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             }
         }
 
+        if (j.contains("indy_call_sites")) {
+            const auto& ics = j["indy_call_sites"];
+            if (ics.contains("enabled")) cfg.indy_call_sites.enabled = ics["enabled"];
+            if (ics.contains("target_packages")) cfg.indy_call_sites.target_packages = ics["target_packages"].get<std::vector<std::string>>();
+        }
+
         if (j.contains("reflection_proxy")) {
             const auto& rp = j["reflection_proxy"];
             if (rp.contains("enabled")) cfg.reflection_proxy.enabled = rp["enabled"];
@@ -349,6 +432,20 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             if (rp.contains("proxy_java_imports")) cfg.reflection_proxy.proxy_java_imports = rp["proxy_java_imports"];
             if (rp.contains("import_packages")) cfg.reflection_proxy.import_packages = rp["import_packages"].get<std::vector<std::string>>();
             else if (rp.contains("target_packages")) cfg.reflection_proxy.import_packages = rp["target_packages"].get<std::vector<std::string>>();
+            if (rp.contains("mh_lookup_helpers_min")) {
+                if (rp["mh_lookup_helpers_min"].is_number()) {
+                    cfg.reflection_proxy.mh_lookup_helpers_min = rp["mh_lookup_helpers_min"].get<size_t>();
+                } else if (rp["mh_lookup_helpers_min"].is_string()) {
+                    try { cfg.reflection_proxy.mh_lookup_helpers_min = std::stoull(rp["mh_lookup_helpers_min"].get<std::string>()); } catch (...) {}
+                }
+            }
+            if (rp.contains("mh_lookup_helpers_max")) {
+                if (rp["mh_lookup_helpers_max"].is_number()) {
+                    cfg.reflection_proxy.mh_lookup_helpers_max = rp["mh_lookup_helpers_max"].get<size_t>();
+                } else if (rp["mh_lookup_helpers_max"].is_string()) {
+                    try { cfg.reflection_proxy.mh_lookup_helpers_max = std::stoull(rp["mh_lookup_helpers_max"].get<std::string>()); } catch (...) {}
+                }
+            }
         }
 
         if (j.contains("number_obfuscation")) {
@@ -363,8 +460,25 @@ std::optional<ObfuscatorConfig> ObfuscatorConfig::from_json(std::string_view jso
             }
         }
 
+        if (j.contains("condy")) {
+            const auto& c = j["condy"];
+            if (c.contains("enabled")) cfg.condy.enabled = c["enabled"];
+            if (c.contains("encrypt_constants")) cfg.condy.encrypt_constants = c["encrypt_constants"];
+        }
+
+        if (j.contains("decompiler_deterrence")) {
+            const auto& dd = j["decompiler_deterrence"];
+            if (dd.contains("enabled")) cfg.decompiler_deterrence.enabled = dd["enabled"];
+            if (dd.contains("overload_return_types")) cfg.decompiler_deterrence.overload_return_types = dd["overload_return_types"];
+            if (dd.contains("synthetic_bridge_tags")) cfg.decompiler_deterrence.synthetic_bridge_tags = dd["synthetic_bridge_tags"];
+            if (dd.contains("phantom_inner_classes")) cfg.decompiler_deterrence.phantom_inner_classes = dd["phantom_inner_classes"];
+            if (dd.contains("custom_attributes")) cfg.decompiler_deterrence.custom_attributes = dd["custom_attributes"];
+            if (dd.contains("scramble_method_order")) cfg.decompiler_deterrence.scramble_method_order = dd["scramble_method_order"];
+        }
+
         if (j.contains("input_jar")) cfg.input_jar = j["input_jar"].get<std::string>();
         if (j.contains("output_jar")) cfg.output_jar = j["output_jar"].get<std::string>();
+        if (j.contains("mapping_file")) cfg.mapping_file = j["mapping_file"].get<std::string>();
         if (j.contains("json_stream_mode")) cfg.json_stream_mode = j["json_stream_mode"];
         if (j.contains("verbose")) cfg.verbose = j["verbose"];
 

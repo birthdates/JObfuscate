@@ -305,13 +305,16 @@ void NumberObfuscationPass::transform_numbers_in_code(bytecode::AttrCode& code, 
 bool NumberObfuscationPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx) {
     if (!ctx.config.number_obfuscation.enabled) return true;
     if (!ctx.is_class_in_scope(cls.name())) return true;
+    return obfuscate_class(cls, ctx);
+}
 
+bool NumberObfuscationPass::obfuscate_class(bytecode::ClassFile& cls, PassContext& ctx) {
+    NumberObfuscationPass pass;
     for (auto& method : cls.methods()) {
         if (auto* code = method.code_mut()) {
-            transform_numbers_in_code(*code, cls.constant_pool(), ctx);
+            pass.transform_numbers_in_code(*code, cls.constant_pool(), ctx);
         }
     }
-
     return true;
 }
 

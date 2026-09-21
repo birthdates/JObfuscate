@@ -1,6 +1,10 @@
 #pragma once
 
 #include "pass.hpp"
+#include "../bytecode/instructions.hpp"
+#include <cstdint>
+#include <random>
+#include <vector>
 
 namespace obf::passes {
 
@@ -12,6 +16,17 @@ public:
     }
 
     bool run_on_class(bytecode::ClassFile& cls, PassContext& ctx) override;
+
+    static std::string encrypt_string_variant(std::string_view input, bytecode::u4 key, size_t variant_idx);
+    static void inject_decryption_method_v0(bytecode::ClassFile& cls, const std::string& decrypt_name);
+
+    // Push a 32-bit decryption key onto the stack as a split expression
+    // (K = A ^ B  or  K = (A ^ B) + C) so no single key constant appears
+    // at the call site. Straight-line ixor/iadd only: verifier-safe.
+    static void emit_split_key(std::vector<bytecode::Instruction>& out,
+                               bytecode::ConstantPool& cp,
+                               uint32_t key,
+                               std::mt19937_64& rng);
 
 private:
     void inject_decryption_method(bytecode::ClassFile& cls, const std::string& decrypt_name, size_t variant_idx);

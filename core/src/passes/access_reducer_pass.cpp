@@ -98,6 +98,9 @@ bool AccessReducerPass::run_on_archive(PassContext& ctx) {
     for (auto& [class_name, cf] : ctx.archive.classes()) {
         if (!ctx.is_class_in_scope(class_name)) continue;
 
+        // Never touch the global string/reflection cache placeholder.
+        if (!ctx.global_cache.class_name.empty() && class_name == ctx.global_cache.class_name) continue;
+
         // Interfaces and annotations are public contracts; their members cannot be private
         if (cf.is_interface() || cf.is_annotation()) continue;
 
@@ -113,6 +116,7 @@ bool AccessReducerPass::run_on_archive(PassContext& ctx) {
                 mname == "values" || mname == "valueOf") {
                 continue;
             }
+            if (ctx.is_keep_protected_method(class_name, mname, mdesc)) continue;
             if (m.is_native() || m.is_abstract()) continue;
             if (ctx.hierarchy.is_method_overridden_in_hierarchy(class_name, mname, mdesc)) {
                 continue;
@@ -166,6 +170,7 @@ bool AccessReducerPass::run_on_archive(PassContext& ctx) {
             if ((f.access_flags & bytecode::access_flags::ACC_ENUM) != 0) continue;
             std::string fname(f.name(cp));
             if (fname == "$VALUES" || fname == "ENUM$VALUES") continue;
+            if (ctx.is_keep_protected_field(class_name, fname, f.descriptor(cp))) continue;
 
             std::string key = class_name + "." + fname;
             if (external_accessed_fields.find(key) == external_accessed_fields.end()) {

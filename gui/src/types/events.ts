@@ -34,6 +34,7 @@ export interface SummaryStats {
   fields_renamed: number;
   strings_encrypted: number;
   methods_flattened: number;
+  methods_exception_dispatched: number;
   reflection_proxies_created: number;
   numbers_obfuscated: number;
   members_privatized: number;

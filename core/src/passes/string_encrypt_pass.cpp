@@ -41,7 +41,7 @@ static void append_mutf8(std::string& out, uint16_t c) {
     }
 }
 
-static std::string encrypt_string_variant(std::string_view input, bytecode::u4 key, size_t variant_idx) {
+std::string StringEncryptPass::encrypt_string_variant(std::string_view input, bytecode::u4 key, size_t variant_idx) {
     size_t v = variant_idx % 4;
     if (v == 0) {
         // Variant 0: 2-Round Feistel Cipher on byte nibbles (L: high 4 bits, R: low 4 bits)
@@ -105,13 +105,66 @@ static std::string encrypt_string_variant(std::string_view input, bytecode::u4 k
     }
 }
 
+void StringEncryptPass::emit_split_key(std::vector<bytecode::Instruction>& out,
+                                         bytecode::ConstantPool& cp,
+                                         uint32_t key,
+                                         std::mt19937_64& rng) {
+    auto push_i32 = [&](int32_t v) {
+        bytecode::Instruction ins;
+        ins.offset = static_cast<bytecode::u4>(-1);
+        if (v >= -1 && v <= 5) {
+            ins.opcode = static_cast<bytecode::Opcode>(
+                static_cast<uint8_t>(bytecode::Opcode::iconst_0) + v);
+            ins.operand = bytecode::NoOperand{};
+        } else if (v >= -128 && v <= 127) {
+            ins.opcode = bytecode::Opcode::bipush;
+            ins.operand = bytecode::ByteOperand{static_cast<bytecode::i1>(v)};
+        } else if (v >= -32768 && v <= 32767) {
+            ins.opcode = bytecode::Opcode::sipush;
+            ins.operand = bytecode::ShortOperand{static_cast<bytecode::i2>(v)};
+        } else {
+            bytecode::u2 c = cp.find_or_add_integer(v);
+            ins.opcode = (c <= 255) ? bytecode::Opcode::ldc : bytecode::Opcode::ldc_w;
+            ins.operand = bytecode::CpIndexOperand{c};
+        }
+        out.push_back(ins);
+    };
+    auto alu = [&](bytecode::Opcode op) {
+        bytecode::Instruction ins;
+        ins.offset = static_cast<bytecode::u4>(-1);
+        ins.opcode = op;
+        ins.operand = bytecode::NoOperand{};
+        out.push_back(ins);
+    };
+
+    // All arithmetic wraps mod 2^32 in JVM int ops, so splits are exact.
+    if ((rng() & 1u) == 0) {
+        // K = A ^ B
+        uint32_t a = static_cast<uint32_t>(rng());
+        uint32_t b = a ^ key;
+        push_i32(static_cast<int32_t>(a));
+        push_i32(static_cast<int32_t>(b));
+        alu(bytecode::Opcode::ixor);
+    } else {
+        // K = (A ^ B) + C
+        uint32_t c = static_cast<uint32_t>(rng());
+        uint32_t t = key - c;
+        uint32_t a = static_cast<uint32_t>(rng());
+        uint32_t b = a ^ t;
+        push_i32(static_cast<int32_t>(a));
+        push_i32(static_cast<int32_t>(b));
+        alu(bytecode::Opcode::ixor);
+        push_i32(static_cast<int32_t>(c));
+        alu(bytecode::Opcode::iadd);
+    }
+}
+
 struct MethodParam {
     std::string desc;
     bytecode::u2 slot;
     bytecode::Opcode load_op;
     std::string append_method_desc;
 };
-
 static std::vector<MethodParam> parse_method_params(std::string_view desc) {
     std::vector<MethodParam> params;
     if (desc.empty() || desc[0] != '(') return params;
@@ -415,7 +468,7 @@ void StringEncryptPass::transform_indy_string_concat(bytecode::ClassFile& cls, P
     }
 }
 
-static void inject_decryption_method_v0(bytecode::ClassFile& cls, const std::string& decrypt_name) {
+void StringEncryptPass::inject_decryption_method_v0(bytecode::ClassFile& cls, const std::string& decrypt_name) {
     auto& cp = cls.constant_pool();
     bytecode::MethodInfo m;
     m.access_flags = (cls.is_interface() ? bytecode::access_flags::ACC_PUBLIC : bytecode::access_flags::ACC_PRIVATE) | 
@@ -1045,6 +1098,275 @@ static void inject_decryption_method_v3(bytecode::ClassFile& cls, const std::str
     cls.methods().push_back(std::move(m));
 }
 
+static std::string encrypt_string_xor(std::string_view input, bytecode::u4 key) {
+    std::string out;
+    out.reserve(input.size() * 3);
+    for (size_t i = 0; i < input.size(); ++i) {
+        uint8_t p = static_cast<uint8_t>(input[i]);
+        uint32_t shift = (i & 3) << 3;
+        uint8_t k = static_cast<uint8_t>(((key >> shift) ^ (i * 31 + 17)) & 0xFF);
+        uint8_t enc = p ^ k;
+        append_mutf8(out, enc);
+    }
+    return out;
+}
+
+static void inject_decryption_method_xor(bytecode::ClassFile& cls, const std::string& decrypt_name) {
+    if (cls.find_method(decrypt_name, "(Ljava/lang/String;I)Ljava/lang/String;")) {
+        return;
+    }
+    auto& cp = cls.constant_pool();
+    bytecode::MethodInfo m;
+    m.access_flags = (cls.is_interface() ? bytecode::access_flags::ACC_PUBLIC : bytecode::access_flags::ACC_PRIVATE) | 
+                     bytecode::access_flags::ACC_STATIC | 
+                     bytecode::access_flags::ACC_SYNTHETIC;
+    m.name_index = cp.find_or_add_utf8(decrypt_name);
+    m.descriptor_index = cp.find_or_add_utf8("(Ljava/lang/String;I)Ljava/lang/String;");
+
+    bytecode::u2 toCharArray_ref = cp.find_or_add_methodref("java/lang/String", "toCharArray", "()[C");
+    bytecode::u2 str_class = cp.find_or_add_class("java/lang/String");
+    bytecode::u2 str_init_ref = cp.find_or_add_methodref("java/lang/String", "<init>", "([C)V");
+
+    std::vector<bytecode::Instruction> instrs;
+    bytecode::u4 cur_bci = 0;
+    auto add_i = [&](bytecode::Opcode op) {
+        bytecode::Instruction inst;
+        inst.offset = cur_bci++;
+        inst.opcode = op;
+        inst.operand = bytecode::NoOperand{};
+        instrs.push_back(inst);
+    };
+    auto add_op = [&](bytecode::Opcode op, bytecode::InstructionOperand operand) {
+        bytecode::Instruction inst;
+        inst.offset = cur_bci++;
+        inst.opcode = op;
+        inst.operand = operand;
+        instrs.push_back(inst);
+    };
+
+    // char[] data = str.toCharArray();
+    add_i(bytecode::Opcode::aload_0);
+    add_op(bytecode::Opcode::invokevirtual, bytecode::CpIndexOperand{toCharArray_ref});
+    add_i(bytecode::Opcode::astore_2);
+
+    // int i = 0;
+    add_i(bytecode::Opcode::iconst_0);
+    add_op(bytecode::Opcode::istore, bytecode::LocalVarOperand{3});
+
+    // L_LOOP:
+    bytecode::u4 bci_loop = cur_bci;
+    add_op(bytecode::Opcode::iload, bytecode::LocalVarOperand{3});
+    add_i(bytecode::Opcode::aload_2);
+    add_i(bytecode::Opcode::arraylength);
+
+    // if_icmpge L_END
+    size_t if_icmpge_idx = instrs.size();
+    bytecode::Instruction if_end_inst;
+    if_end_inst.offset = cur_bci++;
+    if_end_inst.opcode = bytecode::Opcode::if_icmpge;
+    if_end_inst.operand = bytecode::Branch16Operand{0, 0};
+    instrs.push_back(if_end_inst);
+
+    // data[i] = (char) ((data[i] & 0xFF) ^ ((((key >>> ((i & 3) << 3)) ^ (i * 31 + 17))) & 0xFF));
+    add_i(bytecode::Opcode::aload_2);
+    add_op(bytecode::Opcode::iload, bytecode::LocalVarOperand{3});
+
+    // data[i] & 0xFF
+    add_i(bytecode::Opcode::aload_2);
+    add_op(bytecode::Opcode::iload, bytecode::LocalVarOperand{3});
+    add_i(bytecode::Opcode::caload);
+    add_op(bytecode::Opcode::sipush, bytecode::ShortOperand{255});
+    add_i(bytecode::Opcode::iand);
+
+    // (key >>> ((i & 3) << 3))
+    add_i(bytecode::Opcode::iload_1);
+    add_op(bytecode::Opcode::iload, bytecode::LocalVarOperand{3});
+    add_i(bytecode::Opcode::iconst_3);
+    add_i(bytecode::Opcode::iand);
+    add_i(bytecode::Opcode::iconst_3);
+    add_i(bytecode::Opcode::ishl);
+    add_i(bytecode::Opcode::iushr);
+
+    // (i * 31 + 17)
+    add_op(bytecode::Opcode::iload, bytecode::LocalVarOperand{3});
+    add_op(bytecode::Opcode::bipush, bytecode::ByteOperand{31});
+    add_i(bytecode::Opcode::imul);
+    add_op(bytecode::Opcode::bipush, bytecode::ByteOperand{17});
+    add_i(bytecode::Opcode::iadd);
+
+    add_i(bytecode::Opcode::ixor);
+    add_op(bytecode::Opcode::sipush, bytecode::ShortOperand{255});
+    add_i(bytecode::Opcode::iand);
+
+    add_i(bytecode::Opcode::ixor);
+    add_i(bytecode::Opcode::i2c);
+    add_i(bytecode::Opcode::castore);
+
+    // i++
+    add_op(bytecode::Opcode::iinc, bytecode::IincOperand{3, 1});
+
+    // goto L_LOOP
+    bytecode::Instruction goto_inst;
+    goto_inst.offset = cur_bci++;
+    goto_inst.opcode = bytecode::Opcode::goto_op;
+    goto_inst.operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_loop)};
+    instrs.push_back(goto_inst);
+
+    // L_END:
+    bytecode::u4 bci_end = cur_bci;
+    instrs[if_icmpge_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_end)};
+
+    // return new String(data);
+    add_op(bytecode::Opcode::new_op, bytecode::CpIndexOperand{str_class});
+    add_i(bytecode::Opcode::dup);
+    add_i(bytecode::Opcode::aload_2);
+    add_op(bytecode::Opcode::invokespecial, bytecode::CpIndexOperand{str_init_ref});
+    add_i(bytecode::Opcode::areturn);
+
+    bytecode::AttrCode code_attr;
+    code_attr.max_stack = 7;
+    code_attr.max_locals = 4;
+
+    bytecode::u2 char_arr_cls = cp.find_or_add_class("[C");
+    bytecode::BinaryWriter smt_writer;
+    smt_writer.write_u2(2);
+
+    smt_writer.write_u1(253);
+    smt_writer.write_u2(static_cast<bytecode::u2>(bci_loop));
+    smt_writer.write_u1(7);
+    smt_writer.write_u2(char_arr_cls);
+    smt_writer.write_u1(1);
+
+    bytecode::u4 delta_end = bci_end - bci_loop - 1;
+    if (delta_end <= 63) {
+        smt_writer.write_u1(static_cast<bytecode::u1>(delta_end));
+    } else {
+        smt_writer.write_u1(251);
+        smt_writer.write_u2(static_cast<bytecode::u2>(delta_end));
+    }
+
+    bytecode::Attribute smt_attr;
+    smt_attr.name_index = cp.find_or_add_utf8("StackMapTable");
+    bytecode::AttrRaw raw;
+    raw.data = std::move(smt_writer.data());
+    smt_attr.data = std::move(raw);
+    code_attr.attributes.push_back(std::move(smt_attr));
+
+    bytecode::update_code(code_attr, instrs, cp);
+
+    bytecode::Attribute attr;
+    attr.name_index = cp.find_or_add_utf8("Code");
+    attr.data = std::move(code_attr);
+    m.attributes.push_back(std::move(attr));
+    cls.methods().push_back(std::move(m));
+}
+
+static void inject_cached_decryption_wrapper(
+    bytecode::ClassFile& cls,
+    const std::string& wrapper_name,
+    const std::string& inner_name,
+    const std::string& cache_class_name,
+    const std::string& cache_field_name) 
+{
+    if (cls.find_method(wrapper_name, "(Ljava/lang/String;II)Ljava/lang/String;")) {
+        return;
+    }
+    auto& cp = cls.constant_pool();
+    bytecode::MethodInfo m;
+    m.access_flags = (cls.is_interface() ? bytecode::access_flags::ACC_PUBLIC : bytecode::access_flags::ACC_PRIVATE) | 
+                     bytecode::access_flags::ACC_STATIC | 
+                     bytecode::access_flags::ACC_SYNTHETIC;
+    m.name_index = cp.find_or_add_utf8(wrapper_name);
+    m.descriptor_index = cp.find_or_add_utf8("(Ljava/lang/String;II)Ljava/lang/String;");
+
+    bytecode::u2 cache_fref = cp.find_or_add_fieldref(cache_class_name, cache_field_name, "[Ljava/lang/Object;");
+    bytecode::u2 inner_mref = cls.is_interface()
+        ? cp.find_or_add_interface_methodref(std::string(cls.name()), inner_name, "(Ljava/lang/String;I)Ljava/lang/String;")
+        : cp.find_or_add_methodref(std::string(cls.name()), inner_name, "(Ljava/lang/String;I)Ljava/lang/String;");
+    bytecode::u2 str_cls = cp.find_or_add_class("java/lang/String");
+
+    std::vector<bytecode::Instruction> instrs;
+    bytecode::u4 cur_bci = 0;
+    auto add_i = [&](bytecode::Opcode op) {
+        bytecode::Instruction inst;
+        inst.offset = cur_bci++;
+        inst.opcode = op;
+        inst.operand = bytecode::NoOperand{};
+        instrs.push_back(inst);
+    };
+    auto add_op = [&](bytecode::Opcode op, bytecode::InstructionOperand operand) {
+        bytecode::Instruction inst;
+        inst.offset = cur_bci++;
+        inst.opcode = op;
+        inst.operand = operand;
+        instrs.push_back(inst);
+    };
+
+    // 1. Check cache:
+    add_op(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    add_i(bytecode::Opcode::iload_2);
+    add_i(bytecode::Opcode::aaload);
+
+    size_t ifnull_idx = instrs.size();
+    bytecode::Instruction ifnull_inst;
+    ifnull_inst.offset = cur_bci++;
+    ifnull_inst.opcode = bytecode::Opcode::ifnull;
+    ifnull_inst.operand = bytecode::Branch16Operand{0, 0};
+    instrs.push_back(ifnull_inst);
+
+    // Cache hit:
+    add_op(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    add_i(bytecode::Opcode::iload_2);
+    add_i(bytecode::Opcode::aaload);
+    add_op(bytecode::Opcode::checkcast, bytecode::CpIndexOperand{str_cls});
+    add_i(bytecode::Opcode::areturn);
+
+    // L_MISS:
+    bytecode::u4 bci_miss = cur_bci;
+    instrs[ifnull_idx].operand = bytecode::Branch16Operand{0, static_cast<bytecode::i4>(bci_miss)};
+
+    add_i(bytecode::Opcode::aload_0);
+    add_i(bytecode::Opcode::iload_1);
+    add_op(bytecode::Opcode::invokestatic, bytecode::CpIndexOperand{inner_mref});
+    add_i(bytecode::Opcode::astore_3);
+
+    add_op(bytecode::Opcode::getstatic, bytecode::CpIndexOperand{cache_fref});
+    add_i(bytecode::Opcode::iload_2);
+    add_i(bytecode::Opcode::aload_3);
+    add_i(bytecode::Opcode::aastore);
+
+    add_i(bytecode::Opcode::aload_3);
+    add_i(bytecode::Opcode::areturn);
+
+    bytecode::AttrCode code_attr;
+    code_attr.max_stack = 3;
+    code_attr.max_locals = 4;
+
+    bytecode::BinaryWriter smt_writer;
+    smt_writer.write_u2(1);
+    if (bci_miss <= 63) {
+        smt_writer.write_u1(static_cast<bytecode::u1>(bci_miss));
+    } else {
+        smt_writer.write_u1(251);
+        smt_writer.write_u2(static_cast<bytecode::u2>(bci_miss));
+    }
+
+    bytecode::Attribute smt_attr;
+    smt_attr.name_index = cp.find_or_add_utf8("StackMapTable");
+    bytecode::AttrRaw raw;
+    raw.data = std::move(smt_writer.data());
+    smt_attr.data = std::move(raw);
+    code_attr.attributes.push_back(std::move(smt_attr));
+
+    bytecode::update_code(code_attr, instrs, cp);
+
+    bytecode::Attribute attr;
+    attr.name_index = cp.find_or_add_utf8("Code");
+    attr.data = std::move(code_attr);
+    m.attributes.push_back(std::move(attr));
+    cls.methods().push_back(std::move(m));
+}
+
 void StringEncryptPass::inject_decryption_method(bytecode::ClassFile& cls, const std::string& decrypt_name, size_t variant_idx) {
     if (cls.find_method(decrypt_name, "(Ljava/lang/String;I)Ljava/lang/String;")) {
         return;
@@ -1076,28 +1398,40 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
         : static_cast<uint32_t>(ctx.rng() ^ 0xCAFEBABE);
     static size_t decryptor_counter = 0;
 
+    bool is_xor = (ctx.config.string_encryption.algorithm == config::StringEncryptionAlgorithm::XorRollingKey);
+    ctx.ensure_global_cache_name();
+    std::string cache_cls = ctx.get_global_cache_class_name();
+    std::string cache_fld = ctx.get_global_cache_field_name();
+
     struct DecryptorEntry {
-        std::string name;
+        std::string inner_name;
+        std::string wrapper_name;
         size_t variant_idx;
-        bytecode::u2 mref;
+        bytecode::u2 wrapper_mref;
     };
     std::vector<DecryptorEntry> decryptors;
 
     auto get_or_create_decryptor = [&](size_t idx) -> const DecryptorEntry& {
         while (decryptors.size() <= idx) {
             size_t v_idx = decryptors.size() % 4;
-            std::string dname = RenamePass::generate_obfuscated_name(decryptor_counter++, config::RenameMode::ConfusingLong, salt ^ (decryptors.size() * 0x61C88647ULL));
+            std::string iname = RenamePass::generate_obfuscated_name(decryptor_counter++, config::RenameMode::ConfusingLong, salt ^ (decryptors.size() * 0x61C88647ULL));
+            std::string wname = RenamePass::generate_obfuscated_name(decryptor_counter++, config::RenameMode::ConfusingLong, salt ^ (decryptors.size() * 0x9E3779B9ULL));
             bytecode::u2 mref = cls.is_interface()
-                ? cp.find_or_add_interface_methodref(class_name, dname, "(Ljava/lang/String;I)Ljava/lang/String;")
-                : cp.find_or_add_methodref(class_name, dname, "(Ljava/lang/String;I)Ljava/lang/String;");
-            decryptors.push_back({dname, v_idx, mref});
+                ? cp.find_or_add_interface_methodref(class_name, wname, "(Ljava/lang/String;II)Ljava/lang/String;")
+                : cp.find_or_add_methodref(class_name, wname, "(Ljava/lang/String;II)Ljava/lang/String;");
+            decryptors.push_back({iname, wname, v_idx, mref});
         }
         return decryptors[idx];
     };
 
     size_t string_index = 0;
-    std::unordered_map<bytecode::u2, std::pair<bytecode::u2, bytecode::u4>> encrypted_cp_strings;
-    std::unordered_map<bytecode::u2, bytecode::u2> string_to_decryptor_mref;
+    struct EncryptedStringData {
+        bytecode::u2 enc_str_idx{0};
+        bytecode::u4 item_key{0};
+        bytecode::u2 call_mref{0};
+        size_t slot{0};
+    };
+    std::unordered_map<bytecode::u2, EncryptedStringData> encrypted_cp_strings;
 
     size_t min_chunk = std::max<size_t>(1, ctx.config.string_encryption.strings_per_decryptor_min);
     size_t max_chunk = std::max<size_t>(min_chunk, ctx.config.string_encryption.strings_per_decryptor_max);
@@ -1111,7 +1445,7 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
         if (auto* code = method.code_mut()) {
             auto instructions = bytecode::disassemble(code->code);
             std::vector<bytecode::Instruction> new_instructions;
-            new_instructions.reserve(instructions.size() * 3);
+            new_instructions.reserve(instructions.size() * 4);
             bool modified = false;
 
             for (const auto& instr : instructions) {
@@ -1125,31 +1459,39 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
                         bytecode::u2 enc_str_idx = 0;
                         bytecode::u4 item_key = 0;
                         bytecode::u2 call_mref = 0;
+                        size_t slot = 0;
 
                         auto it = encrypted_cp_strings.find(cp_idx);
                         if (it != encrypted_cp_strings.end()) {
-                            enc_str_idx = it->second.first;
-                            item_key = it->second.second;
-                            call_mref = string_to_decryptor_mref[cp_idx];
+                            enc_str_idx = it->second.enc_str_idx;
+                            item_key = it->second.item_key;
+                            call_mref = it->second.call_mref;
+                            slot = it->second.slot;
                         } else {
                             std::string original_str(cp.get_string_value(cp_idx));
                             if (!original_str.empty()) {
+                                slot = ctx.global_cache.get_or_create_slot("s#" + original_str);
+
                                 if (strings_in_current_chunk >= current_chunk_size) {
                                     current_dec_idx++;
                                     current_chunk_size = chunk_dist(ctx.rng);
                                     strings_in_current_chunk = 0;
                                 }
                                 const auto& dec = get_or_create_decryptor(current_dec_idx);
-                                call_mref = dec.mref;
+                                call_mref = dec.wrapper_mref;
                                 strings_in_current_chunk++;
                                 string_index++;
                                 item_key = static_cast<bytecode::u4>(base_key ^ (string_index * 0x5bd1e995U + 0x1337U));
 
-                                std::string enc = encrypt_string_variant(original_str, item_key, dec.variant_idx);
+                                std::string enc = is_xor
+                                    ? encrypt_string_xor(original_str, item_key)
+                                    : encrypt_string_variant(original_str, item_key, dec.variant_idx);
                                 int retries = 0;
                                 while ((enc == original_str || cp.has_utf8(enc)) && retries++ < 50) {
                                     item_key = static_cast<bytecode::u4>(item_key ^ (0x9E3779B9U + retries * 0x1337U));
-                                    enc = encrypt_string_variant(original_str, item_key, dec.variant_idx);
+                                    enc = is_xor
+                                        ? encrypt_string_xor(original_str, item_key)
+                                        : encrypt_string_variant(original_str, item_key, dec.variant_idx);
                                 }
 
                                 enc_str_idx = cp.find_or_add_string(enc);
@@ -1157,8 +1499,7 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
                                     bytecode::u2 new_utf = cp.add_entry(bytecode::CpUtf8{enc});
                                     enc_str_idx = cp.add_entry(bytecode::CpString{new_utf});
                                 }
-                                encrypted_cp_strings[cp_idx] = {enc_str_idx, item_key};
-                                string_to_decryptor_mref[cp_idx] = call_mref;
+                                encrypted_cp_strings[cp_idx] = {enc_str_idx, item_key, call_mref, slot};
                                 ctx.stats.strings_encrypted++;
                             }
                         }
@@ -1176,26 +1517,55 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
                             }
                             new_instructions.push_back(ldc_instr);
 
-                            // 2. ldc/sipush key
-                            bytecode::Instruction key_instr;
-                            key_instr.offset = static_cast<bytecode::u4>(-1);
-                            int32_t signed_key = static_cast<int32_t>(item_key);
-                            if (signed_key >= -32768 && signed_key <= 32767) {
-                                key_instr.opcode = bytecode::Opcode::sipush;
-                                key_instr.operand = bytecode::ShortOperand{static_cast<bytecode::i2>(signed_key)};
+                            // 2. key: single constant or stack-split expression
+                            if (ctx.config.string_encryption.split_keys) {
+                                emit_split_key(new_instructions, cp, item_key, ctx.rng);
                             } else {
-                                bytecode::u2 int_cp = cp.find_or_add_integer(signed_key);
-                                if (int_cp <= 255) {
-                                    key_instr.opcode = bytecode::Opcode::ldc;
-                                    key_instr.operand = bytecode::CpIndexOperand{int_cp};
+                                bytecode::Instruction key_instr;
+                                key_instr.offset = static_cast<bytecode::u4>(-1);
+                                int32_t signed_key = static_cast<int32_t>(item_key);
+                                if (signed_key >= -32768 && signed_key <= 32767) {
+                                    key_instr.opcode = bytecode::Opcode::sipush;
+                                    key_instr.operand = bytecode::ShortOperand{static_cast<bytecode::i2>(signed_key)};
                                 } else {
-                                    key_instr.opcode = bytecode::Opcode::ldc_w;
-                                    key_instr.operand = bytecode::CpIndexOperand{int_cp};
+                                    bytecode::u2 int_cp = cp.find_or_add_integer(signed_key);
+                                    if (int_cp <= 255) {
+                                        key_instr.opcode = bytecode::Opcode::ldc;
+                                        key_instr.operand = bytecode::CpIndexOperand{int_cp};
+                                    } else {
+                                        key_instr.opcode = bytecode::Opcode::ldc_w;
+                                        key_instr.operand = bytecode::CpIndexOperand{int_cp};
+                                    }
+                                }
+                                new_instructions.push_back(key_instr);
+                            }
+
+                            // 3. slot
+                            bytecode::Instruction slot_instr;
+                            slot_instr.offset = static_cast<bytecode::u4>(-1);
+                            int32_t s_slot = static_cast<int32_t>(slot);
+                            if (s_slot >= 0 && s_slot <= 5) {
+                                slot_instr.opcode = static_cast<bytecode::Opcode>(static_cast<uint8_t>(bytecode::Opcode::iconst_0) + s_slot);
+                                slot_instr.operand = bytecode::NoOperand{};
+                            } else if (s_slot >= -128 && s_slot <= 127) {
+                                slot_instr.opcode = bytecode::Opcode::bipush;
+                                slot_instr.operand = bytecode::ByteOperand{static_cast<bytecode::i1>(s_slot)};
+                            } else if (s_slot >= -32768 && s_slot <= 32767) {
+                                slot_instr.opcode = bytecode::Opcode::sipush;
+                                slot_instr.operand = bytecode::ShortOperand{static_cast<bytecode::i2>(s_slot)};
+                            } else {
+                                bytecode::u2 slot_cp = cp.find_or_add_integer(s_slot);
+                                if (slot_cp <= 255) {
+                                    slot_instr.opcode = bytecode::Opcode::ldc;
+                                    slot_instr.operand = bytecode::CpIndexOperand{slot_cp};
+                                } else {
+                                    slot_instr.opcode = bytecode::Opcode::ldc_w;
+                                    slot_instr.operand = bytecode::CpIndexOperand{slot_cp};
                                 }
                             }
-                            new_instructions.push_back(key_instr);
+                            new_instructions.push_back(slot_instr);
 
-                            // 3. invokestatic decrypt_method
+                            // 4. invokestatic wrapper
                             bytecode::Instruction call_instr;
                             call_instr.offset = static_cast<bytecode::u4>(-1);
                             call_instr.opcode = bytecode::Opcode::invokestatic;
@@ -1211,7 +1581,7 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
             }
 
             if (modified) {
-                code->max_stack = std::max<bytecode::u2>(code->max_stack, code->max_stack + 3);
+                code->max_stack = static_cast<bytecode::u2>(code->max_stack + 6);
                 bytecode::update_code(*code, new_instructions, cp);
             }
         }
@@ -1219,23 +1589,31 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
 
     // Collect all Utf8 indices that must NEVER be wiped (e.g. ciphertexts, method descriptors, etc.)
     std::unordered_set<bytecode::u2> protected_utf8_indices;
-    for (const auto& [orig_idx, enc_pair] : encrypted_cp_strings) {
-        if (const auto* enc_str = cp.get_if<bytecode::CpString>(enc_pair.first)) {
+    for (const auto& [orig_idx, enc_data] : encrypted_cp_strings) {
+        if (const auto* enc_str = cp.get_if<bytecode::CpString>(enc_data.enc_str_idx)) {
             protected_utf8_indices.insert(enc_str->string_index);
         }
     }
     for (const auto& dec : decryptors) {
-        if (const auto* mr = cp.get_if<bytecode::CpMethodref>(dec.mref)) {
-            if (const auto* nat = cp.get_if<bytecode::CpNameAndType>(mr->name_and_type_index)) {
+        bytecode::u2 nat_idx = 0;
+        if (const auto* mr = cp.get_if<bytecode::CpMethodref>(dec.wrapper_mref)) {
+            nat_idx = mr->name_and_type_index;
+        } else if (const auto* imr = cp.get_if<bytecode::CpInterfaceMethodref>(dec.wrapper_mref)) {
+            nat_idx = imr->name_and_type_index;
+        }
+        if (nat_idx != 0) {
+            if (const auto* nat = cp.get_if<bytecode::CpNameAndType>(nat_idx)) {
                 protected_utf8_indices.insert(nat->name_index);
                 protected_utf8_indices.insert(nat->descriptor_index);
             }
         }
+        protected_utf8_indices.insert(cp.find_or_add_utf8(dec.inner_name));
+        protected_utf8_indices.insert(cp.find_or_add_utf8("(Ljava/lang/String;I)Ljava/lang/String;"));
     }
 
     // Erase original plaintext strings from the constant pool
-    for (const auto& [orig_idx, enc_pair] : encrypted_cp_strings) {
-        if (orig_idx == enc_pair.first) continue;
+    for (const auto& [orig_idx, enc_data] : encrypted_cp_strings) {
+        if (orig_idx == enc_data.enc_str_idx) continue;
         if (auto* original_cp_str = cp.get_if<bytecode::CpString>(orig_idx)) {
             bytecode::u2 orig_utf8_idx = original_cp_str->string_index;
             if (protected_utf8_indices.count(orig_utf8_idx)) continue;
@@ -1259,9 +1637,14 @@ bool StringEncryptPass::run_on_class(bytecode::ClassFile& cls, PassContext& ctx)
     }
     cp.rebuild_utf8_lookup();
 
-    // Inject all instantiated decryptor methods
+    // Inject all instantiated decryptor methods and cached wrappers
     for (const auto& dec : decryptors) {
-        inject_decryption_method(cls, dec.name, dec.variant_idx);
+        if (is_xor) {
+            inject_decryption_method_xor(cls, dec.inner_name);
+        } else {
+            inject_decryption_method(cls, dec.inner_name, dec.variant_idx);
+        }
+        inject_cached_decryption_wrapper(cls, dec.wrapper_name, dec.inner_name, cache_cls, cache_fld);
     }
 
     return true;

@@ -20,10 +20,14 @@ import java.util.function.Function;
 import java.util.function.Supplier;
 import java.lang.reflect.Method;
 import com.testapp.logic.AbstractDataProcessor;
+import com.testapp.api.API;
+import com.testapp.api.ImplementedAPI;
 
 public class Main {
 
     public static void main(String[] args) {
+        long startMs = System.currentTimeMillis();
+        
         System.out.println("==================================================");
         System.out.println("   Java Obfuscator Comprehensive Test Harness    ");
         System.out.println("==================================================");
@@ -84,10 +88,14 @@ public class Main {
         double fee = gateway.calculateFee(100.0);
         String auditSummary = gateway.generateAuditSummary(); // Interface default method
         long auditEpoch = Auditable.currentAuditEpoch();       // Interface static method
+        API keptApi = API.get();                               // Kept-interface fixture
+        keptApi.methodOne();
+        keptApi.methodTwo();
         if (paid && Math.abs(fee - 3.20) < 0.01 
             && gateway.getProviderName().contains("Stripe")
             && auditSummary.contains("PAYMENT_GATEWAY")
-            && auditEpoch > 0) {
+            && auditEpoch > 0
+            && keptApi != null && ImplementedAPI.getCalls() == 3) {
             System.out.println("PASSED (Fee: " + fee + ")");
             passed++;
         } else {
@@ -252,8 +260,9 @@ public class Main {
             runLanguageFeatureTest("com.testapp.language.Java25", 25);
         }
 
+        long elapsed = System.currentTimeMillis() - startMs;
         System.out.println("==================================================");
-        System.out.println("[FINAL-STATUS] ALL APPLICABLE LANGUAGE & OBFUSCATION SUITES COMPLETE.");
+        System.out.println("[FINAL-STATUS] ALL APPLICABLE LANGUAGE & OBFUSCATION SUITES COMPLETED IN " + elapsed + "ms.");
         System.exit(0);
     }
 

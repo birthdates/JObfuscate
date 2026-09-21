@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ObfuscatorConfig, UserProfile } from "./types/config";
 import { ObfEvent, SummaryEvent } from "./types/events";
 import { BUILT_IN_PROFILES } from "./utils/defaults";
+import { Shield, Search } from "lucide-react";
 import "./App.css";
 
 import { Header } from "./components/Header";
@@ -17,6 +19,7 @@ import { MetricsSection } from "./components/MetricsSection";
 import { ConsoleSection } from "./components/ConsoleSection";
 import { Footer } from "./components/Footer";
 import { ProfileModal } from "./components/ProfileModal";
+import { RetraceSection } from "./components/RetraceSection";
 
 const PROFILES_STORAGE_KEY = "jobfuscate_profiles_v1";
 
@@ -37,7 +40,8 @@ const isPassEnabled = (passId: string, cfg: ObfuscatorConfig): boolean => {
         cfg.strip.strip_line_numbers ||
         cfg.strip.strip_local_variables ||
         cfg.strip.strip_source_file ||
-        cfg.strip.strip_source_debug
+        cfg.strip.strip_source_debug ||
+        cfg.strip.strip_kotlin_metadata
       );
     case "AccessReducer":
       return !!cfg.access_reducer?.enabled;
@@ -83,9 +87,14 @@ export const App: React.FC = () => {
     return p.config;
   });
 
+  // Active view tab
+  const [activeTab, setActiveTab] = useState<"obfuscate" | "retrace">("obfuscate");
+
   // Archive paths
   const [inputJar, setInputJar] = useState<string>("");
   const [outputJar, setOutputJar] = useState<string>("");
+  const [mappingFile, setMappingFile] = useState<string>("");
+  const [isDraggingFile, setIsDraggingFile] = useState<boolean>(false);
 
   // Telemetry & Execution state
   const [status, setStatus] = useState<"idle" | "running" | "success" | "error">("idle");
@@ -277,6 +286,7 @@ export const App: React.FC = () => {
       target_packages: config.target_packages,
       exclude_packages: config.exclude_packages,
       exclude_classes: config.exclude_classes,
+      keep_rules: config.keep_rules,
       ignore_dependencies: config.ignore_dependencies,
     });
   };
@@ -356,6 +366,24 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleBrowseMapping = async () => {
+    if (isTauriEnv()) {
+      try {
+        const res = await invoke<string | null>("pick_output_jar", {
+          defaultPath: mappingFile || (outputJar ? outputJar.replace(/\.jar$/i, "_mapping.txt") : "mapping.txt"),
+        });
+        if (res) {
+          setMappingFile(res);
+        }
+      } catch (err) {
+        console.error("Failed to open save picker:", err);
+      }
+    } else {
+      const mock = prompt("Enter path to export mapping file:", mappingFile || "mapping.txt");
+      if (mock) setMappingFile(mock);
+    }
+  };
+
   const handleImportJson = async () => {
     if (isTauriEnv()) {
       try {
@@ -390,11 +418,48 @@ export const App: React.FC = () => {
     }
   };
 
+  // Tauri native drag-drop listener for JAR archives
+  useEffect(() => {
+    if (!isTauriEnv()) return;
+
+    let unlisten: UnlistenFn | null = null;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "enter" || event.payload.type === "over") {
+          setIsDraggingFile(true);
+        } else if (event.payload.type === "leave") {
+          setIsDraggingFile(false);
+        } else if (event.payload.type === "drop") {
+          setIsDraggingFile(false);
+          if (event.payload.paths && event.payload.paths.length > 0) {
+            const droppedPath = event.payload.paths[0];
+            const lower = droppedPath.toLowerCase();
+            if (lower.endsWith(".jar") || lower.endsWith(".war") || lower.endsWith(".zip")) {
+              handleInputChange(droppedPath);
+            }
+          }
+        }
+      })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => {
+        console.error("Failed to register drag-drop listener:", err);
+      });
+
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, []);
+
   const handleExportJson = async () => {
     const jsonStr = JSON.stringify(config, null, 2);
     if (isTauriEnv()) {
       try {
-        await invoke<string | null>("save_config_file", { configJson: jsonStr });
+        await invoke<string | null>("save_config_file", {
+          content: jsonStr,
+          defaultName: `${config.profile_name || "jobfuscate_config"}.json`,
+        });
       } catch (err) {
         alert("Failed to export configuration: " + String(err));
       }
@@ -439,6 +504,7 @@ export const App: React.FC = () => {
           ...config,
           input_jar: inputJar,
           output_jar: outputJar,
+          mapping_file: mappingFile || config.mapping_file || undefined,
         };
         await invoke("run_obfuscation", {
           inputJar,
@@ -494,6 +560,7 @@ export const App: React.FC = () => {
             fields_renamed: 34,
             strings_encrypted: 244,
             methods_flattened: 52,
+            methods_exception_dispatched: 31,
             reflection_proxies_created: 73,
             numbers_obfuscated: 355,
             members_privatized: 14,
@@ -543,51 +610,87 @@ export const App: React.FC = () => {
           cliError={cliError}
         />
 
-        {/* Main Grid: Settings & Execution */}
-        <main className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Archives & Config Passes (8 cols) */}
-          <div className="lg:col-span-7 xl:col-span-8 space-y-6">
-            <ArchiveSection
-              inputJar={inputJar}
-              outputJar={outputJar}
-              onInputChange={handleInputChange}
-              onOutputChange={handleOutputChange}
-              onBrowseInput={handleBrowseInput}
-              onBrowseOutput={handleBrowseOutput}
-            />
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+          <button
+            onClick={() => setActiveTab("obfuscate")}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === "obfuscate"
+                ? "bg-blue-600/20 text-blue-400 border border-blue-500/30 shadow-lg shadow-blue-500/10"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900 border border-transparent"
+            }`}
+          >
+            <Shield className="w-3.5 h-3.5" />
+            <span>Obfuscator Studio</span>
+          </button>
+          <button
+            onClick={() => setActiveTab("retrace")}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === "retrace"
+                ? "bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 shadow-lg shadow-emerald-500/10"
+                : "text-slate-400 hover:text-slate-200 hover:bg-slate-900 border border-transparent"
+            }`}
+          >
+            <Search className="w-3.5 h-3.5" />
+            <span>Stack Trace Deobfuscator (Retrace)</span>
+          </button>
+        </div>
 
-            <ScopingSection
-              targetPackages={config.target_packages}
-              excludePackages={config.exclude_packages}
-              excludeClasses={config.exclude_classes}
-              ignoreDependencies={config.ignore_dependencies}
-              onChangeTargetPackages={(pkgs) => setConfig({ ...config, target_packages: pkgs })}
-              onChangeExcludePackages={(pkgs) => setConfig({ ...config, exclude_packages: pkgs })}
-              onChangeExcludeClasses={(classes) => setConfig({ ...config, exclude_classes: classes })}
-              onChangeIgnoreDependencies={(val) => setConfig({ ...config, ignore_dependencies: val })}
-            />
+        {activeTab === "obfuscate" ? (
+          /* Main Grid: Settings & Execution */
+          <main className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left Column: Archives & Config Passes (8 cols) */}
+            <div className="lg:col-span-7 xl:col-span-8 space-y-6">
+              <ArchiveSection
+                inputJar={inputJar}
+                outputJar={outputJar}
+                mappingFile={mappingFile}
+                isDragging={isDraggingFile}
+                onInputChange={handleInputChange}
+                onOutputChange={handleOutputChange}
+                onMappingChange={setMappingFile}
+                onBrowseInput={handleBrowseInput}
+                onBrowseOutput={handleBrowseOutput}
+                onBrowseMapping={handleBrowseMapping}
+              />
 
-            <PassesSection config={config} onChangeConfig={setConfig} />
-          </div>
+              <ScopingSection
+                targetPackages={config.target_packages}
+                excludePackages={config.exclude_packages}
+                excludeClasses={config.exclude_classes}
+                keepRules={config.keep_rules}
+                ignoreDependencies={config.ignore_dependencies}
+                onChangeTargetPackages={(pkgs) => setConfig({ ...config, target_packages: pkgs })}
+                onChangeExcludePackages={(pkgs) => setConfig({ ...config, exclude_packages: pkgs })}
+                onChangeExcludeClasses={(classes) => setConfig({ ...config, exclude_classes: classes })}
+                onChangeKeepRules={(rules) => setConfig({ ...config, keep_rules: rules })}
+                onChangeIgnoreDependencies={(val) => setConfig({ ...config, ignore_dependencies: val })}
+              />
 
-          {/* Right Column: Execution, Stepper, Metrics & Console (4 cols) */}
-          <div className="lg:col-span-5 xl:col-span-4 space-y-6">
-            <ExecutionSection
-              isRunning={status === "running"}
-              activePhase={activePhase}
-              progressPercent={progressPercent}
-              status={status}
-              onStart={handleStartObfuscation}
-              onCancel={handleCancelObfuscation}
-            />
+              <PassesSection config={config} onChangeConfig={setConfig} />
+            </div>
 
-            <StepperSection steps={steps} />
+            {/* Right Column: Execution, Stepper, Metrics & Console (4 cols) */}
+            <div className="lg:col-span-5 xl:col-span-4 space-y-6">
+              <ExecutionSection
+                isRunning={status === "running"}
+                activePhase={activePhase}
+                progressPercent={progressPercent}
+                status={status}
+                onStart={handleStartObfuscation}
+                onCancel={handleCancelObfuscation}
+              />
 
-            <MetricsSection summary={summary} />
+              <StepperSection steps={steps} />
 
-            <ConsoleSection logs={logs} onClear={() => setLogs([])} />
-          </div>
-        </main>
+              <MetricsSection summary={summary} />
+
+              <ConsoleSection logs={logs} onClear={() => setLogs([])} />
+            </div>
+          </main>
+        ) : (
+          <RetraceSection />
+        )}
 
         {/* Global Footer */}
         <Footer />

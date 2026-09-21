@@ -102,6 +102,8 @@ public:
 
     void set_access_flags(u2 flags) noexcept { m_access_flags = flags; }
     void set_version(u2 major, u2 minor = 0) noexcept { m_major_version = major; m_minor_version = minor; }
+    void set_this_class(u2 index) noexcept { m_this_class = index; }
+    void set_super_class(u2 index) noexcept { m_super_class = index; }
 
 private:
     u4 m_magic{JVM_CLASS_MAGIC};

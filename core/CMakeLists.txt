@@ -16,6 +16,7 @@ set(CORE_SOURCES
     src/bytecode/class_file.cpp
     src/jar/jar_archive.cpp
     src/config/obfuscator_config.cpp
+    src/config/keep_rule.cpp
     src/reporter/ndjson_reporter.cpp
     src/reporter/console_reporter.cpp
     src/passes/pass.cpp
@@ -24,9 +25,15 @@ set(CORE_SOURCES
     src/passes/rename_pass.cpp
     src/passes/string_encrypt_pass.cpp
     src/passes/control_flow_pass.cpp
+    src/passes/indy_call_site_pass.cpp
     src/passes/reflection_proxy_pass.cpp
     src/passes/number_obfuscation_pass.cpp
     src/passes/access_reducer_pass.cpp
+    src/passes/shrinker_pass.cpp
+    src/passes/condy_pass.cpp
+    src/passes/decompiler_deterrence_pass.cpp
+    src/passes/class_encryption_pass.cpp
+    src/passes/symbol_mapping.cpp
     src/engine/obfuscator_engine.cpp
     ${MINIZ_SOURCES}
 )

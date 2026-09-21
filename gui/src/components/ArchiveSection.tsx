@@ -1,38 +1,47 @@
-﻿import React, { useState } from "react";
+import React, { useState } from "react";
 import { FolderOpen, Save, FileCode, CheckCircle } from "lucide-react";
 
 interface ArchiveSectionProps {
   inputJar: string;
   outputJar: string;
+  mappingFile?: string;
+  isDragging?: boolean;
   onInputChange: (path: string) => void;
   onOutputChange: (path: string) => void;
+  onMappingChange?: (path: string) => void;
   onBrowseInput: () => void;
   onBrowseOutput: () => void;
+  onBrowseMapping?: () => void;
 }
 
 export const ArchiveSection: React.FC<ArchiveSectionProps> = ({
   inputJar,
   outputJar,
+  mappingFile,
+  isDragging: isDraggingExternal,
   onInputChange,
   onOutputChange,
+  onMappingChange,
   onBrowseInput,
   onBrowseOutput,
+  onBrowseMapping,
 }) => {
-  const [isDragging, setIsDragging] = useState(false);
+  const [isDraggingInternal, setIsDraggingInternal] = useState(false);
+  const isDragging = isDraggingExternal || isDraggingInternal;
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragging(true);
+    setIsDraggingInternal(true);
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragging(false);
+    setIsDraggingInternal(false);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    setIsDragging(false);
+    setIsDraggingInternal(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       const file = e.dataTransfer.files[0];
       // In web/desktop webview, file path might be accessible
@@ -127,6 +136,30 @@ export const ArchiveSection: React.FC<ArchiveSectionProps> = ({
               <Save className="w-3.5 h-3.5 text-blue-400" />
               Save As
             </button>
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-400 mb-1">
+            Symbol Mapping Export (Optional <code className="text-emerald-400 font-mono">mapping.txt</code>)
+          </label>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              value={mappingFile || ""}
+              onChange={(e) => onMappingChange?.(e.target.value)}
+              placeholder="C:/path/to/mapping.txt (Optional)"
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-200 focus:outline-none focus:border-emerald-500"
+            />
+            {onBrowseMapping && (
+              <button
+                onClick={onBrowseMapping}
+                className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 rounded-lg border border-slate-700 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
+              >
+                <Save className="w-3.5 h-3.5 text-emerald-400" />
+                Browse
+              </button>
+            )}
           </div>
         </div>
       </div>

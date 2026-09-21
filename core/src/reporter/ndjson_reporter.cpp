@@ -49,6 +49,7 @@ void NdJsonReporter::complete(bool success, uint64_t duration_ms, const Obfuscat
             {"classes_processed", stats.classes_processed},
             {"strings_encrypted", stats.strings_encrypted},
             {"methods_flattened", stats.methods_flattened},
+            {"methods_exception_dispatched", stats.methods_exception_dispatched},
             {"fields_renamed", stats.fields_renamed},
             {"methods_renamed", stats.methods_renamed},
             {"classes_renamed", stats.classes_renamed},
@@ -56,6 +57,13 @@ void NdJsonReporter::complete(bool success, uint64_t duration_ms, const Obfuscat
             {"reflection_proxies_created", stats.reflection_proxies_created},
             {"numbers_obfuscated", stats.numbers_obfuscated},
             {"members_privatized", stats.members_privatized},
+            {"classes_shrunk", stats.classes_shrunk},
+            {"methods_shrunk", stats.methods_shrunk},
+            {"fields_shrunk", stats.fields_shrunk},
+            {"attributes_shrunk", stats.attributes_shrunk},
+            {"classes_encrypted", stats.classes_encrypted},
+            {"condy_call_sites_created", stats.condy_call_sites_created},
+            {"decompiler_deterrents_applied", stats.decompiler_deterrents_applied},
             {"original_size_bytes", stats.original_size_bytes},
             {"output_size_bytes", stats.output_size_bytes}
         }}

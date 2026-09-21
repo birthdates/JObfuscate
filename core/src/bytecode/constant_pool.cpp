@@ -160,6 +160,51 @@ u2 ConstantPool::find_or_add_long(i8 value) {
     return add_entry(CpLong{value});
 }
 
+u2 ConstantPool::find_or_add_method_handle(u1 reference_kind, u2 reference_index) {
+    for (size_t i = 1; i < m_entries.size(); ++i) {
+        if (const auto* item = std::get_if<CpMethodHandle>(&m_entries[i])) {
+            if (item->reference_kind == reference_kind && item->reference_index == reference_index) {
+                return static_cast<u2>(i);
+            }
+        }
+    }
+    return add_entry(CpMethodHandle{reference_kind, reference_index});
+}
+
+u2 ConstantPool::find_or_add_method_type(std::string_view descriptor) {
+    u2 desc_idx = find_or_add_utf8(descriptor);
+    for (size_t i = 1; i < m_entries.size(); ++i) {
+        if (const auto* item = std::get_if<CpMethodType>(&m_entries[i])) {
+            if (item->descriptor_index == desc_idx) return static_cast<u2>(i);
+        }
+    }
+    return add_entry(CpMethodType{desc_idx});
+}
+
+u2 ConstantPool::find_or_add_invoke_dynamic(u2 bsm_attr_index, std::string_view name, std::string_view descriptor) {
+    u2 nat_idx = find_or_add_name_and_type(name, descriptor);
+    for (size_t i = 1; i < m_entries.size(); ++i) {
+        if (const auto* item = std::get_if<CpInvokeDynamic>(&m_entries[i])) {
+            if (item->bootstrap_method_attr_index == bsm_attr_index && item->name_and_type_index == nat_idx) {
+                return static_cast<u2>(i);
+            }
+        }
+    }
+    return add_entry(CpInvokeDynamic{bsm_attr_index, nat_idx});
+}
+
+u2 ConstantPool::find_or_add_dynamic(u2 bsm_attr_index, std::string_view name, std::string_view descriptor) {
+    u2 nat_idx = find_or_add_name_and_type(name, descriptor);
+    for (size_t i = 1; i < m_entries.size(); ++i) {
+        if (const auto* item = std::get_if<CpDynamic>(&m_entries[i])) {
+            if (item->bootstrap_method_attr_index == bsm_attr_index && item->name_and_type_index == nat_idx) {
+                return static_cast<u2>(i);
+            }
+        }
+    }
+    return add_entry(CpDynamic{bsm_attr_index, nat_idx});
+}
+
 bool ConstantPool::has_utf8(std::string_view value) const {
     return m_utf8_lookup.find(std::string(value)) != m_utf8_lookup.end();
 }

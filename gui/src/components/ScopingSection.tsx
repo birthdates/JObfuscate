@@ -5,10 +5,12 @@ interface ScopingSectionProps {
   targetPackages: string[];
   excludePackages: string[];
   excludeClasses: string[];
+  keepRules: string[];
   ignoreDependencies: boolean;
   onChangeTargetPackages: (pkgs: string[]) => void;
   onChangeExcludePackages: (pkgs: string[]) => void;
   onChangeExcludeClasses: (classes: string[]) => void;
+  onChangeKeepRules: (rules: string[]) => void;
   onChangeIgnoreDependencies: (val: boolean) => void;
 }
 
@@ -16,10 +18,12 @@ export const ScopingSection: React.FC<ScopingSectionProps> = ({
   targetPackages,
   excludePackages,
   excludeClasses,
+  keepRules,
   ignoreDependencies,
   onChangeTargetPackages,
   onChangeExcludePackages,
   onChangeExcludeClasses,
+  onChangeKeepRules,
   onChangeIgnoreDependencies,
 }) => {
   return (
@@ -110,6 +114,30 @@ export const ScopingSection: React.FC<ScopingSectionProps> = ({
             </span>
           </label>
         </div>
+      </div>
+
+      <div className="mt-3">
+        <label className="block text-xs text-slate-400 font-medium mb-1">
+          Keep Rules (<code className="text-blue-400 font-mono">--keep / --keep-file</code>, one per line)
+        </label>
+        <textarea
+          value={keepRules.join("\n")}
+          onChange={(e) =>
+            onChangeKeepRules(
+              e.target.value
+                .split("\n")
+                .map((s) => s.trim())
+                .filter(Boolean)
+            )
+          }
+          placeholder={"-keep class com.myapp.Plugin { *; }\n-keepclassmembers class com.myapp.Api { public *; }"}
+          rows={3}
+          spellCheck={false}
+          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-blue-500"
+        />
+        <span className="text-[10px] text-slate-500">
+          ProGuard-style: matching classes/members are exempt from shrinking and renaming
+        </span>
       </div>
     </section>
   );

@@ -77,6 +77,10 @@ export const MetricsSection: React.FC<MetricsSectionProps> = ({ summary }) => {
             <span className="font-mono text-indigo-400 font-semibold">{summary.methods_flattened}</span>
           </div>
           <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-800/60">
+            <span className="text-[10px] text-slate-500 block">Exception Routed</span>
+            <span className="font-mono text-indigo-400 font-semibold">{summary.methods_exception_dispatched ?? 0}</span>
+          </div>
+          <div className="bg-slate-950/50 p-2 rounded-lg border border-slate-800/60">
             <span className="text-[10px] text-slate-500 block">Debug Info Stripped</span>
             <span className="font-mono text-blue-400 font-semibold">{summary.debug_attributes_stripped}</span>
           </div>

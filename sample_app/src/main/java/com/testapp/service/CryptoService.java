@@ -92,4 +92,13 @@ public class CryptoService {
         int idx = Arrays.binarySearch(cloned, 42);
         return idx >= 0 && cloned[idx] == 42;
     }
+
+    // Dead code for tree-shaking / code shrinking tests
+    @Deprecated
+    public static final String UNUSED_DEAD_FIELD = "DEAD_UNUSED_FIELD_VALUE_12345";
+
+    @Deprecated
+    public static int unusedDeadCalculation(int a, int b) {
+        return (a * 999) ^ (b + 777);
+    }
 }

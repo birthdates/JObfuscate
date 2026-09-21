@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../config/obfuscator_config.hpp"
+#include "../config/keep_rule.hpp"
 #include "../reporter/reporter.hpp"
 #include <unordered_map>
 #include <unordered_set>
@@ -45,6 +46,28 @@ struct ProxyMethodInfo {
     bool is_class_literal{false};
 };
 
+struct GlobalCacheInfo {
+    std::string class_name;
+    std::string field_name{"CACHE"};
+    size_t total_slots{0};
+    bool synthesized{false};
+    std::unordered_map<std::string, size_t> target_to_slot;
+    // Reserved shared MethodHandle lookup helpers living in the cache class.
+    // Method shape: (String,String,Class,Class[])MH, bound per-helper to
+    // findVirtual or findStatic; getter shape: (String,String,Class)MH.
+    std::vector<std::string> mh_lookup_virtual;
+    std::vector<std::string> mh_lookup_static;
+    std::vector<std::string> mh_lookup_getters;
+
+    size_t get_or_create_slot(const std::string& key) {
+        auto it = target_to_slot.find(key);
+        if (it != target_to_slot.end()) return it->second;
+        size_t slot = total_slots++;
+        target_to_slot[key] = slot;
+        return slot;
+    }
+};
+
 struct PassContext {
     jar::JarArchive& archive;
     const config::ObfuscatorConfig& config;
@@ -58,6 +81,26 @@ struct PassContext {
     std::unordered_map<std::string, std::string> field_renames;         // "com/app/MyClass.secret" -> "a"
     std::unordered_map<std::string, std::string> method_renames;        // "com/app/MyClass.doIt()V" -> "b"
     std::vector<ProxyMethodInfo> proxy_methods;
+    GlobalCacheInfo global_cache;
+
+    // Parsed keep rules (filled by the engine before the pipeline runs).
+    std::vector<config::KeepRule> keep_rules;
+
+    [[nodiscard]] std::string get_global_cache_class_name() const;
+    [[nodiscard]] std::string get_global_cache_field_name() const;
+    void ensure_global_cache_name();
+
+    // Keep-rule queries. Classes: only -keep protects the class itself.
+    // Methods: -keep/-keepclassmembers on the class or any hierarchy-related
+    // class (overrides must stay consistent), except <init> (exact class).
+    // Fields: exact class only (fields are hidden, not overridden).
+    [[nodiscard]] bool is_keep_protected_class(std::string_view internal_name) const;
+    [[nodiscard]] bool is_keep_protected_method(const std::string& internal_class,
+                                               std::string_view name,
+                                               std::string_view desc) const;
+    [[nodiscard]] bool is_keep_protected_field(const std::string& internal_class,
+                                               std::string_view name,
+                                               std::string_view desc = {}) const;
 
     std::mt19937_64 rng{1337};
 

@@ -13,6 +13,8 @@ public:
 
     bool run_on_class(bytecode::ClassFile& cls, PassContext& ctx) override;
 
+    static bool obfuscate_class(bytecode::ClassFile& cls, PassContext& ctx);
+
 private:
     void transform_numbers_in_code(bytecode::AttrCode& code, bytecode::ConstantPool& cp, PassContext& ctx);
 };

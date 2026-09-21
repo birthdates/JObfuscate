@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <sstream>
 #include <iomanip>
+#include <random>
 
 namespace obf::passes {
 
@@ -308,7 +309,10 @@ static bool skip_element_value(
         }
         case 's': {
             if (offset + 2 > bytes.size()) return false;
-            if (ctx.config.string_encryption.enabled && ctx.config.string_encryption.encrypt_annotation_strings && ctx.config.rename.enabled && !orig_cls.empty() && ctx.is_class_in_scope(orig_cls)) {
+            // kotlin.Metadata d1/d2 payloads are binary name tables, not text:
+            // encoding them would corrupt the annotation, so always preserve.
+            if (orig_cls != "kotlin/Metadata" &&
+                ctx.config.string_encryption.enabled && ctx.config.string_encryption.encrypt_annotation_strings && ctx.config.rename.enabled && !orig_cls.empty() && ctx.is_class_in_scope(orig_cls)) {
                 bytecode::u2 str_idx = (static_cast<bytecode::u2>(bytes[offset]) << 8) | bytes[offset + 1];
                 std::string_view str_val = cp.get_utf8(str_idx);
                 if (!str_val.empty()) {
@@ -506,22 +510,24 @@ bool RenamePass::run_on_archive(PassContext& ctx) {
 
         auto& cp = cf->constant_pool();
         auto instrs = bytecode::disassemble(m->code_mut()->code);
-        size_t ldc_count = 0;
+        std::string old_dot_class = pm.target_class;
+        std::replace(old_dot_class.begin(), old_dot_class.end(), '/', '.');
+
         for (auto& inst : instrs) {
             if (inst.opcode == bytecode::Opcode::ldc || inst.opcode == bytecode::Opcode::ldc_w) {
-                if (ldc_count == 0 && !new_dot_class.empty()) {
-                    bytecode::u2 idx = cp.find_or_add_string(new_dot_class);
-                    inst.opcode = (idx <= 255) ? bytecode::Opcode::ldc : bytecode::Opcode::ldc_w;
-                    inst.operand = bytecode::CpIndexOperand{idx};
-                } else if (ldc_count == 1 && !new_member_name.empty()) {
-                    bytecode::u2 idx = cp.find_or_add_string(new_member_name);
-                    inst.opcode = (idx <= 255) ? bytecode::Opcode::ldc : bytecode::Opcode::ldc_w;
-                    inst.operand = bytecode::CpIndexOperand{idx};
-                } else {
-                    if (const auto* cp_op = std::get_if<bytecode::CpIndexOperand>(&inst.operand)) {
-                        if (const auto* str = cp.get_if<bytecode::CpString>(cp_op->index)) {
-                            std::string val(cp.get_utf8(str->string_index));
-                            std::string slash_val = val;
+                if (const auto* cp_op = std::get_if<bytecode::CpIndexOperand>(&inst.operand)) {
+                    if (const auto* str = cp.get_if<bytecode::CpString>(cp_op->index)) {
+                        std::string_view val = cp.get_utf8(str->string_index);
+                        if (!new_dot_class.empty() && val == old_dot_class) {
+                            bytecode::u2 idx = cp.find_or_add_string(new_dot_class);
+                            inst.opcode = (idx <= 255) ? bytecode::Opcode::ldc : bytecode::Opcode::ldc_w;
+                            inst.operand = bytecode::CpIndexOperand{idx};
+                        } else if (!new_member_name.empty() && val == pm.target_method) {
+                            bytecode::u2 idx = cp.find_or_add_string(new_member_name);
+                            inst.opcode = (idx <= 255) ? bytecode::Opcode::ldc : bytecode::Opcode::ldc_w;
+                            inst.operand = bytecode::CpIndexOperand{idx};
+                        } else {
+                            std::string slash_val(val);
                             std::replace(slash_val.begin(), slash_val.end(), '.', '/');
                             if (auto it = ctx.class_renames.find(slash_val); it != ctx.class_renames.end()) {
                                 std::string new_dot = it->second;
@@ -533,7 +539,6 @@ bool RenamePass::run_on_archive(PassContext& ctx) {
                         }
                     }
                 }
-                ldc_count++;
             }
         }
         bytecode::update_code(*m->code_mut(), instrs, cp);
@@ -549,12 +554,20 @@ bool RenamePass::run_on_archive(PassContext& ctx) {
         }
         ctx.archive.classes() = std::move(updated_classes);
         update_manifest(ctx);
+        if (ctx.config.rename.remap_resources) {
+            remap_resources(ctx);
+        }
+    }
+
+    if (!ctx.config.mapping_file.empty()) {
+        export_mapping(ctx);
     }
 
     return true;
 }
 
 void RenamePass::generate_mappings(PassContext& ctx) {
+    m_mapping_records.clear();
     size_t class_counter = 0;
     size_t field_counter = 0;
     size_t method_counter = 0;
@@ -579,6 +592,7 @@ void RenamePass::generate_mappings(PassContext& ctx) {
         for (const auto& [class_name, cf] : ctx.archive.classes()) {
             if (!ctx.config.is_class_in_scope(class_name)) continue;
             if (ctx.config.rename.keep_main_class && class_name == main_cls_internal) continue;
+            if (ctx.is_keep_protected_class(class_name)) continue;
 
             // Don't rename classes in exclusions
             bool excluded = false;
@@ -671,6 +685,8 @@ void RenamePass::generate_mappings(PassContext& ctx) {
                     }
                 }
                 std::string fname(f.name(cf.constant_pool()));
+                std::string fdesc(f.descriptor(cf.constant_pool()));
+                if (ctx.is_keep_protected_field(class_name, fname, fdesc)) continue;
                 std::string key = class_name + "." + fname;
                 std::string obf_name = generate_obfuscated_name(field_counter++, ctx.config.rename.mode, field_salt);
                 ctx.field_renames[key] = obf_name;
@@ -685,6 +701,10 @@ void RenamePass::generate_mappings(PassContext& ctx) {
                 std::string mdesc(m.descriptor(cf.constant_pool()));
 
                 if (is_reserved_method_name(mname, mdesc) || m.is_native() || m.is_synthetic()) {
+                    continue;
+                }
+                // Keep rules (with hierarchy-consistent overrides) opt out here.
+                if (ctx.is_keep_protected_method(class_name, mname, mdesc)) {
                     continue;
                 }
 
@@ -709,6 +729,49 @@ void RenamePass::generate_mappings(PassContext& ctx) {
                 }
             }
         }
+    }
+
+    // 3. Build symbol mapping records
+    for (const auto& [class_name, cf] : ctx.archive.classes()) {
+        std::string orig_dot = class_name;
+        std::replace(orig_dot.begin(), orig_dot.end(), '/', '.');
+
+        std::string obf_dot = orig_dot;
+        if (auto it = ctx.class_renames.find(class_name); it != ctx.class_renames.end()) {
+            obf_dot = it->second;
+            std::replace(obf_dot.begin(), obf_dot.end(), '/', '.');
+        }
+
+        ClassMappingRecord rec;
+        rec.orig_name = orig_dot;
+        rec.obf_name = obf_dot;
+
+        // Fields
+        for (const auto& f : cf.fields()) {
+            std::string fname(f.name(cf.constant_pool()));
+            std::string fdesc(f.descriptor(cf.constant_pool()));
+            std::string fkey = class_name + "." + fname;
+            std::string obf_fname = fname;
+            if (auto fit = ctx.field_renames.find(fkey); fit != ctx.field_renames.end()) {
+                obf_fname = fit->second;
+            }
+            rec.fields.push_back({jvm_type_to_source(fdesc), fname, obf_fname});
+        }
+
+        // Methods
+        for (const auto& m : cf.methods()) {
+            std::string mname(m.name(cf.constant_pool()));
+            std::string mdesc(m.descriptor(cf.constant_pool()));
+            std::string mkey = class_name + "." + mname + mdesc;
+            std::string obf_mname = mname;
+            if (auto mit = ctx.method_renames.find(mkey); mit != ctx.method_renames.end()) {
+                obf_mname = mit->second;
+            }
+            auto [ret_type, params] = jvm_method_desc_to_source(mdesc);
+            rec.methods.push_back({ret_type, mname, params, obf_mname});
+        }
+
+        m_mapping_records.push_back(std::move(rec));
     }
 }
 
@@ -978,6 +1041,168 @@ void RenamePass::update_manifest(PassContext& ctx) {
             std::replace(new_main.begin(), new_main.end(), '/', '.');
             ctx.archive.set_main_class(new_main);
         }
+    }
+}
+
+static bool is_ident_boundary(char c) {
+    return !(std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '$' || c == '.' || c == '/');
+}
+
+static bool is_text_data(const std::vector<bytecode::u1>& data) {
+    if (data.empty()) return true;
+    size_t check_len = std::min(data.size(), size_t(1024));
+    for (size_t i = 0; i < check_len; ++i) {
+        if (data[i] == 0) return false;
+    }
+    return true;
+}
+
+static bool matches_resource_pattern(std::string_view filename, std::string_view pattern) {
+    if (pattern.empty() || pattern == "*") return true;
+    if (filename == pattern) return true;
+    if (pattern.starts_with("*.")) {
+        std::string_view ext = pattern.substr(1);
+        return filename.ends_with(ext);
+    }
+    if (pattern.ends_with("/*")) {
+        std::string_view prefix = pattern.substr(0, pattern.size() - 1);
+        return filename.starts_with(prefix);
+    }
+    if (pattern.ends_with('*')) {
+        std::string_view prefix = pattern.substr(0, pattern.size() - 1);
+        return filename.starts_with(prefix);
+    }
+    if (filename.ends_with("/" + std::string(pattern))) return true;
+    return false;
+}
+
+void RenamePass::remap_resources(PassContext& ctx) {
+    if (ctx.class_renames.empty()) return;
+
+    struct RenamePair {
+        std::string old_name;
+        std::string new_name;
+    };
+    std::vector<RenamePair> pairs;
+    pairs.reserve(ctx.class_renames.size() * 2);
+
+    for (const auto& [old_slash, new_slash] : ctx.class_renames) {
+        std::string old_dot = old_slash;
+        std::replace(old_dot.begin(), old_dot.end(), '/', '.');
+        std::string new_dot = new_slash;
+        std::replace(new_dot.begin(), new_dot.end(), '/', '.');
+
+        pairs.push_back({old_dot, new_dot});
+        if (old_dot != old_slash) {
+            pairs.push_back({old_slash, new_slash});
+        }
+    }
+
+    // Sort by length descending to prevent prefix/substring collisions
+    std::sort(pairs.begin(), pairs.end(), [](const RenamePair& a, const RenamePair& b) {
+        return a.old_name.size() > b.old_name.size();
+    });
+
+    size_t remapped_resources_count = 0;
+    std::vector<std::string> keys_to_remove;
+    std::vector<std::pair<std::string, jar::JarEntry>> new_resource_entries;
+
+    for (auto& [res_name, entry] : ctx.archive.resources()) {
+        if (res_name == "META-INF/MANIFEST.MF") continue;
+
+        bool matches = false;
+        for (const auto& pat : ctx.config.rename.resource_patterns) {
+            if (matches_resource_pattern(res_name, pat)) {
+                matches = true;
+                break;
+            }
+        }
+        if (!matches) {
+            if (res_name.ends_with(".yml") || res_name.ends_with(".yaml") ||
+                res_name.ends_with(".json") || res_name.ends_with(".xml") ||
+                res_name.starts_with("META-INF/services/")) {
+                matches = true;
+            }
+        }
+
+        if (!matches || !is_text_data(entry.data)) {
+            continue;
+        }
+
+        std::string content(reinterpret_cast<const char*>(entry.data.data()), entry.data.size());
+        bool content_modified = false;
+
+        for (const auto& pair : pairs) {
+            size_t pos = 0;
+            while ((pos = content.find(pair.old_name, pos)) != std::string::npos) {
+                bool left_ok = (pos == 0) || is_ident_boundary(content[pos - 1]);
+                bool right_ok = (pos + pair.old_name.size() == content.size()) || 
+                                is_ident_boundary(content[pos + pair.old_name.size()]);
+
+                if (!right_ok && content.size() >= pos + pair.old_name.size() + 6) {
+                    if (content.substr(pos + pair.old_name.size(), 6) == ".class") {
+                        size_t after_class = pos + pair.old_name.size() + 6;
+                        if (after_class == content.size() || is_ident_boundary(content[after_class])) {
+                            right_ok = true;
+                        }
+                    }
+                }
+
+                if (left_ok && right_ok) {
+                    content.replace(pos, pair.old_name.size(), pair.new_name);
+                    pos += pair.new_name.size();
+                    content_modified = true;
+                } else {
+                    pos += pair.old_name.size();
+                }
+            }
+        }
+
+        std::string final_name = res_name;
+        if (res_name.starts_with("META-INF/services/")) {
+            std::string iface_dot = res_name.substr(18);
+            std::string iface_slash = iface_dot;
+            std::replace(iface_slash.begin(), iface_slash.end(), '.', '/');
+            if (auto it = ctx.class_renames.find(iface_slash); it != ctx.class_renames.end()) {
+                std::string new_iface_dot = it->second;
+                std::replace(new_iface_dot.begin(), new_iface_dot.end(), '/', '.');
+                final_name = "META-INF/services/" + new_iface_dot;
+            }
+        }
+
+        if (content_modified || final_name != res_name) {
+            remapped_resources_count++;
+            entry.data.assign(content.begin(), content.end());
+            if (final_name != res_name) {
+                entry.name = final_name;
+                keys_to_remove.push_back(res_name);
+                new_resource_entries.emplace_back(final_name, std::move(entry));
+            }
+        }
+    }
+
+    for (const auto& k : keys_to_remove) {
+        ctx.archive.resources().erase(k);
+    }
+    for (auto& [k, v] : new_resource_entries) {
+        ctx.archive.resources()[k] = std::move(v);
+    }
+
+    if (remapped_resources_count > 0) {
+        ctx.reporter.log(reporter::LogLevel::Info,
+                         "Remapped class references in " + std::to_string(remapped_resources_count) +
+                         " resource descriptors (plugin.yml, services, etc.)");
+    }
+}
+
+void RenamePass::export_mapping(PassContext& ctx) {
+    if (ctx.config.mapping_file.empty()) return;
+    if (write_symbol_mapping_file(m_mapping_records, ctx.config.mapping_file)) {
+        ctx.reporter.log(reporter::LogLevel::Info,
+                         "Exported symbol mapping file to: " + ctx.config.mapping_file.string());
+    } else {
+        ctx.reporter.log(reporter::LogLevel::Error,
+                         "Failed to write symbol mapping file to: " + ctx.config.mapping_file.string());
     }
 }
 
